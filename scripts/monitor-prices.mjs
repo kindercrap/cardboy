@@ -133,6 +133,9 @@ async function monitor() {
             image_url: listing.image || card.image_url,
             change_percent: change,
             last_checked: checkedAt,
+            monitor_status: "active",
+            monitor_message: "Automatic daily price monitoring is active for this exact Yuyu-tei variant.",
+            monitor_checked_at: checkedAt,
             updated_at: checkedAt,
           },
         });
@@ -169,6 +172,24 @@ async function monitor() {
       }
     } catch (error) {
       failed += 1;
+      const checkedAt = new Date().toISOString();
+      const sourceCode = sourceSetCode(sourceUrl);
+      const message = sourceCode
+        ? "This exact Yuyu-tei variant is not currently available in the automatic daily catalog. Use the bookmark importer for updates."
+        : "Automatic monitoring currently supports exact One Piece Yuyu-tei variants. Use the bookmark importer for this card."
+      await Promise.all(linkedCards.map((card) => {
+        const filter = `user_id=eq.${encodeURIComponent(card.user_id)}&id=eq.${encodeURIComponent(card.id)}`;
+        return rest(`cards?${filter}`, {
+          method: "PATCH",
+          prefer: "return=minimal",
+          body: {
+            monitor_status: "unsupported",
+            monitor_message: message,
+            monitor_checked_at: checkedAt,
+            updated_at: checkedAt,
+          },
+        });
+      }));
       console.warn(`One saved Yuyu-tei source could not be matched: ${error instanceof Error ? error.message : "unknown error"}`);
     }
   }

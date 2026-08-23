@@ -254,6 +254,9 @@ async function loadCloudPortfolio() {
       sortOrder: Number.isFinite(Number(card.sort_order)) ? Number(card.sort_order) : index,
       change: Number(card.change_percent || 0),
       lastChecked: card.last_checked || card.updated_at,
+      monitorStatus: card.monitor_status || "pending",
+      monitorMessage: card.monitor_message || "Waiting for the next scheduled catalog check.",
+      monitorCheckedAt: card.monitor_checked_at || null,
       history: padHistory(snapshots.get(card.id) || [], card.source_price),
     }));
     const live = Object.fromEntries(remote.fxRates.map((rate) => [rate.currency, Number(rate.php_rate)]));
@@ -347,6 +350,28 @@ function phpValue(card) {
 
 function unitPhp(card) {
   return card.nativePrice * state.rates[card.currency];
+}
+
+function monitoringInfo(card) {
+  if (card.monitorStatus === "active") {
+    return {
+      className: "active",
+      label: "PRICE MONITORED",
+      detail: "Automatic daily price monitoring is active for this exact Yuyu-tei variant.",
+    };
+  }
+  if (card.monitorStatus === "unsupported") {
+    return {
+      className: "manual",
+      label: "MANUAL UPDATE",
+      detail: card.monitorMessage || "This exact variant is not currently available in the automatic price catalog. Use the bookmark importer to update it.",
+    };
+  }
+  return {
+    className: "pending",
+    label: "CHECK PENDING",
+    detail: "Monitoring support will be confirmed during the next scheduled price check.",
+  };
 }
 
 function ownedCards() {
@@ -618,10 +643,11 @@ function renderCards() {
   const filtered = state.filter === "ALL" ? state.cards : state.cards.filter((card) => card.series === state.filter);
   const portfolioCards = ownedCards();
   const ownedUnits = portfolioCards.reduce((sum, card) => sum + card.quantity, 0);
+  const monitoredCards = state.cards.filter((card) => card.monitorStatus === "active").length;
   return `
     <section class="page">
       <div class="page-head">
-        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} tracked · ${portfolioCards.length} owned · ${ownedUnits} owned units</p></div>
+        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} tracked · ${portfolioCards.length} owned · ${ownedUnits} owned units · ${monitoredCards} price monitored</p></div>
       </div>
       <div class="toolbar">
         <div class="filters" aria-label="Filter by card series">
@@ -642,10 +668,11 @@ function renderCards() {
 
 function renderCardTile(card) {
   const series = SERIES[card.series] || { color: "#c8ff34" };
+  const monitor = monitoringInfo(card);
   return `
     <article class="card-tile" data-id="${html(card.id)}" draggable="true">
       <button class="card-open" data-action="details" data-id="${html(card.id)}" aria-label="View ${html(card.title)} card details">
-        <div class="card-art">${renderArt(card)}<span class="quantity-pill">× ${card.quantity}</span><span class="ownership-pill ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ OWNED" : "WATCHING"}</span></div>
+        <div class="card-art">${renderArt(card)}<span class="quantity-pill">× ${card.quantity}</span><span class="ownership-pill ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ OWNED" : "WATCHING"}</span><span class="monitoring-pill ${monitor.className}" title="${html(monitor.detail)}">${monitor.label}</span></div>
         <div class="card-body">
           <div class="card-meta"><span class="series-name" style="color:${series.color}">${html(card.series)}</span><span class="card-code">${html(card.code)}</span></div>
           <div class="card-price-row"><div class="card-price-stack"><strong class="card-price">${money(unitPhp(card))}</strong><small>${nativeMoney(card.nativePrice, card.currency)}</small></div><span class="price-change ${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "↗ +" : "↘ "}${card.change.toFixed(1)}%</span></div>
@@ -779,9 +806,10 @@ function renderDetailsModal() {
   const card = state.cards.find((item) => item.id === state.activeCardId);
   if (!card) return "";
   const series = SERIES[card.series] || { color: "#6f7900" };
+  const monitor = monitoringInfo(card);
   const labels = ["SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG"];
   return modalShell(
-    `<div class="modal-body"><div class="details-layout"><div class="detail-art">${renderArt(card)}</div><div class="details-copy"><div class="details-title-row"><div><div class="details-series" style="color:${series.color}">${html(card.series)}</div><div class="details-code">${html(card.code)} · ${html(card.title)}</div></div><button class="edit-detail-button" data-action="edit" data-id="${html(card.id)}">EDIT</button></div><div class="detail-price">${money(unitPhp(card))}</div><div class="detail-native">${nativeMoney(card.nativePrice, card.currency)} per card · ${card.quantity} ${card.quantity === 1 ? "copy" : "copies"}</div><div class="detail-ownership ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ Card I own · Included in dashboard" : "Watching · Not included in dashboard"}</div><div class="detail-stats"><div class="detail-stat"><span>Total value</span><strong>${money(phpValue(card))}</strong></div><div class="detail-stat"><span>24h move</span><strong class="${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}%</strong></div><div class="detail-stat"><span>Last checked</span><strong>${formatDate(card.lastChecked)}</strong></div></div><div class="detail-source">Price source: <a href="${html(safeUrl(card.sourceUrl))}" target="_blank" rel="noreferrer">${html(card.sourceUrl)}</a></div><div class="modal-chart-tabs">${["MAX", "1M", "3M", "6M", "1Y"].map((range) => `<button class="range-button ${range === "1Y" ? "active" : ""}">${range}</button>`).join("")}</div>${chartSvg(card.history.map((price) => price * state.rates[card.currency]), labels, series.color, `detail-${html(card.id)}`, "detail-chart")}</div></div></div>`,
+    `<div class="modal-body"><div class="details-layout"><div class="detail-art">${renderArt(card)}</div><div class="details-copy"><div class="details-title-row"><div><div class="details-series" style="color:${series.color}">${html(card.series)}</div><div class="details-code">${html(card.code)} · ${html(card.title)}</div></div><button class="edit-detail-button" data-action="edit" data-id="${html(card.id)}">EDIT</button></div><div class="detail-price">${money(unitPhp(card))}</div><div class="detail-native">${nativeMoney(card.nativePrice, card.currency)} per card · ${card.quantity} ${card.quantity === 1 ? "copy" : "copies"}</div><div class="detail-tags"><div class="detail-ownership ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ Card I own · Included in dashboard" : "Watching · Not included in dashboard"}</div><div class="detail-monitor ${monitor.className}" title="${html(monitor.detail)}"><span></span>${monitor.label}</div></div><p class="detail-monitor-copy">${html(monitor.detail)}</p><div class="detail-stats"><div class="detail-stat"><span>Total value</span><strong>${money(phpValue(card))}</strong></div><div class="detail-stat"><span>24h move</span><strong class="${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}%</strong></div><div class="detail-stat"><span>Last checked</span><strong>${formatDate(card.lastChecked)}</strong></div></div><div class="detail-source">Price source: <a href="${html(safeUrl(card.sourceUrl))}" target="_blank" rel="noreferrer">${html(card.sourceUrl)}</a></div><div class="modal-chart-tabs">${["MAX", "1M", "3M", "6M", "1Y"].map((range) => `<button class="range-button ${range === "1Y" ? "active" : ""}">${range}</button>`).join("")}</div>${chartSvg(card.history.map((price) => price * state.rates[card.currency]), labels, series.color, `detail-${html(card.id)}`, "detail-chart")}</div></div></div>`,
     { title: "Card details", className: "wide" },
   );
 }
@@ -1132,6 +1160,15 @@ async function saveCard(event) {
     image,
     owned: data.get("owned") === "on",
     lastChecked: new Date().toISOString(),
+    monitorStatus: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
+      ? existing.monitorStatus || "pending"
+      : "pending",
+    monitorMessage: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
+      ? existing.monitorMessage || "Waiting for the next scheduled catalog check."
+      : "Waiting for the next scheduled catalog check.",
+    monitorCheckedAt: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
+      ? existing.monitorCheckedAt || null
+      : null,
   };
   let priceMovement = null;
   if (editingId) {

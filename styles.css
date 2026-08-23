@@ -1016,6 +1016,38 @@ h1 {
   background: rgba(30, 38, 10, 0.84);
 }
 
+.monitoring-pill {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 20px;
+  color: #d8dbe0;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.055em;
+  background: rgba(10, 11, 13, 0.82);
+  backdrop-filter: blur(6px);
+}
+
+.monitoring-pill.active {
+  border-color: rgba(75, 225, 149, 0.5);
+  color: #76efad;
+  background: rgba(8, 46, 30, 0.88);
+}
+
+.monitoring-pill.manual {
+  border-color: rgba(255, 184, 77, 0.5);
+  color: #ffc56b;
+  background: rgba(55, 36, 8, 0.88);
+}
+
+.monitoring-pill.pending {
+  border-color: rgba(163, 170, 181, 0.38);
+  color: #d0d4da;
+}
+
 .card-tile:hover .quantity-pill {
   transform: translateY(-1px);
   background: rgba(10, 11, 13, 0.9);
@@ -1783,6 +1815,64 @@ h1 {
 .detail-ownership.owned {
   color: #536000;
   background: #e6f2b7;
+}
+
+.detail-tags {
+  margin-bottom: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-tags .detail-ownership {
+  margin-bottom: 0;
+}
+
+.detail-monitor {
+  width: fit-content;
+  padding: 5px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 6px;
+  color: #666c74;
+  font-size: 9px;
+  font-weight: 900;
+  background: #e5e7e9;
+}
+
+.detail-monitor span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8b929b;
+}
+
+.detail-monitor.active {
+  color: #17613e;
+  background: #d9f3e5;
+}
+
+.detail-monitor.active span {
+  background: #27b66c;
+  box-shadow: 0 0 0 3px rgba(39, 182, 108, 0.12);
+}
+
+.detail-monitor.manual {
+  color: #785016;
+  background: #f8e8c9;
+}
+
+.detail-monitor.manual span {
+  background: #e89a28;
+}
+
+.detail-monitor-copy {
+  margin: 0 0 15px;
+  max-width: 520px;
+  color: #777d84;
+  font-size: 9px;
+  line-height: 1.45;
 }
 
 .detail-stats {

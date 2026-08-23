@@ -97,6 +97,9 @@ export const backend = {
       sort_order: Number.isFinite(Number(card.sortOrder)) ? Number(card.sortOrder) : 0,
       change_percent: card.change || 0,
       last_checked: card.lastChecked,
+      monitor_status: card.monitorStatus || "pending",
+      monitor_message: card.monitorMessage || "Waiting for the next scheduled catalog check.",
+      monitor_checked_at: card.monitorCheckedAt || null,
       updated_at: new Date().toISOString(),
     };
     const { error } = await client.from("cards").upsert(row, { onConflict: "user_id,id" });
