@@ -17,6 +17,8 @@ Open `http://127.0.0.1:4173`.
 - Quantity-aware portfolio dashboard and collection totals
 - Portfolio history and series-allocation graphs
 - Filterable card gallery with unique series colors
+- Drag-to-reorder collection cards with cloud-synced custom ordering
+- “Card I own” tags, with dashboard values and graphs limited to owned cards
 - Card details, price history, source URL, and edit/delete flows
 - Server-side URL extraction for card details, source price, and product image when exposed by the source page
 - Manual photo upload with in-browser resizing
@@ -48,6 +50,7 @@ In local preview mode, the 9:00 AM PHT schedule runs while the local app server 
 The production files are already included:
 
 - `supabase/migrations/20260823000000_cardboy.sql`: tables, indexes, Row Level Security, and the image bucket
+- `supabase/migrations/20260823123000_owned_cards_and_sort_order.sql`: owned-card portfolio filtering and persistent custom ordering
 - `supabase/functions/extract-card`: authenticated on-demand source extraction
 - `supabase/functions/daily-price-check`: user-triggered or unattended batch checking, FX refresh, history, and notifications
 - `supabase/setup-cron.sql`: the daily 09:00 PHT schedule

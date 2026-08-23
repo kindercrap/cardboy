@@ -62,7 +62,7 @@ export const backend = {
   async loadPortfolio() {
     if (!client || !currentUser) return null;
     const [cardsResult, snapshotsResult, ratesResult, fxResult, notificationsResult] = await Promise.all([
-      client.from("cards").select("*").order("created_at", { ascending: true }),
+      client.from("cards").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true }),
       client.from("price_snapshots").select("card_id,source_price,checked_at").order("checked_at", { ascending: true }),
       client.from("user_rates").select("*").maybeSingle(),
       client.from("fx_rates").select("currency,php_rate,fetched_at"),
@@ -93,6 +93,8 @@ export const backend = {
       source_currency: card.currency,
       source_price: card.nativePrice,
       image_url: card.image,
+      is_owned: card.owned !== false,
+      sort_order: Number.isFinite(Number(card.sortOrder)) ? Number(card.sortOrder) : 0,
       change_percent: card.change || 0,
       last_checked: card.lastChecked,
       updated_at: new Date().toISOString(),
@@ -114,6 +116,18 @@ export const backend = {
     if (!client || !currentUser) return;
     const { error } = await client.from("cards").delete().eq("id", id);
     if (error) throw error;
+  },
+
+  async reorderCards(cards) {
+    if (!client || !currentUser || !cards?.length) return;
+    const updatedAt = new Date().toISOString();
+    const results = await Promise.all(cards.map((card, index) => client
+      .from("cards")
+      .update({ sort_order: index, updated_at: updatedAt })
+      .eq("user_id", currentUser.id)
+      .eq("id", card.id)));
+    const failed = results.find((result) => result.error);
+    if (failed?.error) throw failed.error;
   },
 
   async saveRates(rates, customized) {

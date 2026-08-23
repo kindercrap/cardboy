@@ -2,7 +2,7 @@ import { backend } from "./backend.js";
 
 const STORAGE_KEY = "cardboy-demo-v1";
 const CARD_IMPORT_KEY = "cardboy-pending-import-v1";
-const APP_SCHEMA_VERSION = 3;
+const APP_SCHEMA_VERSION = 4;
 const DAILY_CHECK_HOUR = 9;
 const DAILY_CHECK_LABEL = "9:00 AM PHT";
 
@@ -25,6 +25,8 @@ const defaultCards = [
     currency: "JPY",
     nativePrice: 39800,
     image: "https://card.yuyu-tei.jp/opc/front/op09/10155.jpg",
+    owned: true,
+    sortOrder: 0,
     change: 2.3,
     lastChecked: new Date().toISOString(),
     history: [31800, 32400, 33100, 32900, 34200, 35100, 36300, 35800, 37100, 38200, 38900, 39800],
@@ -39,6 +41,8 @@ const defaultCards = [
     currency: "JPY",
     nativePrice: 2850,
     image: "",
+    owned: true,
+    sortOrder: 1,
     change: 4.2,
     lastChecked: new Date().toISOString(),
     history: [1900, 2010, 2080, 2200, 2170, 2310, 2480, 2410, 2550, 2630, 2740, 2850],
@@ -53,6 +57,8 @@ const defaultCards = [
     currency: "JPY",
     nativePrice: 4680,
     image: "",
+    owned: true,
+    sortOrder: 2,
     change: 6.4,
     lastChecked: new Date().toISOString(),
     history: [3510, 3600, 3490, 3770, 3890, 4030, 4210, 4090, 4320, 4470, 4390, 4680],
@@ -78,6 +84,9 @@ let state = loadState();
 let pendingCardImport = loadPendingCardImport();
 let pendingImageFile = null;
 let backendSyncInProgress = false;
+let nativeCardDrag = null;
+let pointerCardDrag = null;
+let suppressCardOpenUntil = 0;
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
@@ -93,6 +102,11 @@ function loadState() {
         ? { ...card, nativePrice: 39800, image: "https://card.yuyu-tei.jp/opc/front/op09/10155.jpg", change: 2.3, history: [31800, 32400, 33100, 32900, 34200, 35100, 36300, 35800, 37100, 38200, 38900, 39800] }
         : card);
     }
+    migratedCards = migratedCards.map((card, index) => ({
+      ...card,
+      owned: card.owned !== false,
+      sortOrder: index,
+    }));
     return {
       ...structuredClone(initialState),
       ...saved,
@@ -132,6 +146,7 @@ function normalizeCardImport(value) {
     currency: ["JPY", "USD"].includes(value.currency) ? value.currency : "JPY",
     nativePrice: Number.isFinite(nativePrice) && nativePrice >= 0 ? nativePrice : "",
     image: imageUrl === "#" ? "" : imageUrl,
+    owned: value.owned !== false,
     availability: String(value.availability || "").replace(/[^a-z]/gi, "").slice(0, 40),
   };
 }
@@ -203,7 +218,7 @@ async function loadCloudPortfolio() {
       list.push(Number(snapshot.source_price));
       snapshots.set(snapshot.card_id, list);
     });
-    state.cards = remote.cards.map((card) => ({
+    state.cards = remote.cards.map((card, index) => ({
       id: card.id,
       series: card.series,
       code: card.code,
@@ -213,6 +228,8 @@ async function loadCloudPortfolio() {
       currency: card.source_currency,
       nativePrice: Number(card.source_price),
       image: card.image_url || "",
+      owned: card.is_owned !== false,
+      sortOrder: Number.isFinite(Number(card.sort_order)) ? Number(card.sort_order) : index,
       change: Number(card.change_percent || 0),
       lastChecked: card.last_checked || card.updated_at,
       history: padHistory(snapshots.get(card.id) || [], card.source_price),
@@ -310,12 +327,16 @@ function unitPhp(card) {
   return card.nativePrice * state.rates[card.currency];
 }
 
+function ownedCards() {
+  return state.cards.filter((card) => card.owned !== false);
+}
+
 function totalPortfolio() {
-  return state.cards.reduce((sum, card) => sum + phpValue(card), 0);
+  return ownedCards().reduce((sum, card) => sum + phpValue(card), 0);
 }
 
 function previousPortfolio() {
-  return state.cards.reduce((sum, card) => {
+  return ownedCards().reduce((sum, card) => {
     const previous = card.history.at(-2) ?? card.nativePrice;
     return sum + previous * state.rates[card.currency] * card.quantity;
   }, 0);
@@ -406,16 +427,17 @@ function renderHeader() {
 }
 
 function renderDashboard() {
+  const portfolioCards = ownedCards();
   const total = totalPortfolio();
   const previous = previousPortfolio();
   const changeAmount = total - previous;
   const changePercent = previous ? (changeAmount / previous) * 100 : 0;
-  const units = state.cards.reduce((sum, card) => sum + card.quantity, 0);
-  const seriesCount = new Set(state.cards.map((card) => card.series)).size;
+  const units = portfolioCards.reduce((sum, card) => sum + card.quantity, 0);
+  const seriesCount = new Set(portfolioCards.map((card) => card.series)).size;
   const metrics = [
     { label: "Portfolio value", value: money(total), meta: "Live in Philippine peso", icon: "wallet" },
     { label: "Today's movement", value: `${changeAmount >= 0 ? "+" : ""}${money(changeAmount)}`, meta: `${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(1)}% across your cards`, icon: "trend", tone: changeAmount >= 0 ? "positive" : "negative" },
-    { label: "Total cards", value: units.toLocaleString(), meta: `${state.cards.length} unique cards`, icon: "cards" },
+    { label: "Total cards", value: units.toLocaleString(), meta: `${portfolioCards.length} unique owned cards`, icon: "cards" },
     { label: "Card series", value: seriesCount, meta: `${seriesCount} collections tracked`, icon: "layers" },
   ];
   return `
@@ -424,7 +446,7 @@ function renderDashboard() {
         <div>
           <p class="eyebrow">Portfolio overview</p>
           <h1>Good ${greeting()}, collector.</h1>
-          <p class="page-subtitle">Here’s how your card collection is moving today. Daily check begins at ${DAILY_CHECK_LABEL}.</p>
+           <p class="page-subtitle">Only cards tagged “Card I own” are included. Daily check begins at ${DAILY_CHECK_LABEL}.</p>
         </div>
         <button class="primary-button dark" data-action="refresh">${icon("refresh")}<span>CHECK PRICES</span></button>
       </div>
@@ -443,7 +465,7 @@ function renderDashboard() {
       <div class="dashboard-grid">
         <article class="panel chart-panel">
           <div class="panel-head">
-            <div><h2 class="panel-title">Portfolio performance</h2><p class="panel-subtitle">Combined value of all card quantities</p></div>
+             <div><h2 class="panel-title">Portfolio performance</h2><p class="panel-subtitle">Combined value of owned card quantities</p></div>
             <div class="range-tabs" aria-label="Chart range">
               ${["1M", "3M", "6M", "1Y"].map((range) => `<button class="range-button ${range === "1Y" ? "active" : ""}">${range}</button>`).join("")}
             </div>
@@ -465,8 +487,9 @@ function greeting() {
 }
 
 function renderPortfolioChart() {
+  const portfolioCards = ownedCards();
   const series = Array.from({ length: 12 }, (_, index) =>
-    state.cards.reduce((sum, card) => {
+    portfolioCards.reduce((sum, card) => {
       const price = card.history[index] ?? card.history.at(-1) ?? card.nativePrice;
       return sum + price * state.rates[card.currency] * card.quantity;
     }, 0),
@@ -512,7 +535,7 @@ function chartSvg(values, labels, color, gradientId, className = "price-chart") 
 
 function allocationData() {
   const totals = {};
-  state.cards.forEach((card) => {
+  ownedCards().forEach((card) => {
     totals[card.series] = (totals[card.series] || 0) + phpValue(card);
   });
   return Object.entries(totals)
@@ -533,26 +556,25 @@ function renderAllocation() {
     <article class="panel allocation-panel">
       <div class="panel-head"><div><h2 class="panel-title">Series allocation</h2><p class="panel-subtitle">Share of your portfolio value</p></div></div>
       <div class="donut-wrap">
-        <div class="donut" style="background: conic-gradient(${stops.join(",")})"></div>
+        <div class="donut" style="background:${stops.length ? `conic-gradient(${stops.join(",")})` : "#292c32"}"></div>
         <div class="donut-copy"><strong>${data.length}</strong><small>series</small></div>
       </div>
       <div class="legend">
-        ${data
-          .slice(0, 5)
-          .map((item) => `<div class="legend-row"><span class="legend-dot" style="background:${item.color}"></span><span>${html(item.series)}</span><strong>${((item.value / total) * 100).toFixed(0)}%</strong></div>`)
-          .join("")}
+        ${data.length
+          ? data.slice(0, 5).map((item) => `<div class="legend-row"><span class="legend-dot" style="background:${item.color}"></span><span>${html(item.series)}</span><strong>${((item.value / total) * 100).toFixed(0)}%</strong></div>`).join("")
+          : '<div class="dashboard-empty">Tag a card as “Card I own” to include it here.</div>'}
       </div>
     </article>
   `;
 }
 
 function renderHoldings() {
-  const cards = [...state.cards].sort((a, b) => phpValue(b) - phpValue(a)).slice(0, 4);
+  const cards = [...ownedCards()].sort((a, b) => phpValue(b) - phpValue(a)).slice(0, 4);
   return `
     <article class="panel holdings-panel">
       <div class="holdings-head panel-head"><div><h2 class="panel-title">Top holdings</h2><p class="panel-subtitle">Your highest-value cards by total quantity</p></div><button class="ghost-button" data-action="navigate" data-page="cards">VIEW ALL</button></div>
       <div class="holdings-list">
-        ${cards
+        ${cards.length ? cards
           .map(
             (card) => `
             <div class="holding-row" data-action="details" data-id="${html(card.id)}" tabindex="0" role="button">
@@ -563,7 +585,7 @@ function renderHoldings() {
               <strong>${money(phpValue(card))}</strong>
             </div>`,
           )
-          .join("")}
+          .join("") : '<div class="dashboard-empty holdings-empty">No owned cards yet. Tag one from its Edit card window.</div>'}
       </div>
     </article>
   `;
@@ -572,11 +594,12 @@ function renderHoldings() {
 function renderCards() {
   const filters = ["ALL", ...new Set(state.cards.map((card) => card.series))];
   const filtered = state.filter === "ALL" ? state.cards : state.cards.filter((card) => card.series === state.filter);
-  const units = state.cards.reduce((sum, card) => sum + card.quantity, 0);
+  const portfolioCards = ownedCards();
+  const ownedUnits = portfolioCards.reduce((sum, card) => sum + card.quantity, 0);
   return `
     <section class="page">
       <div class="page-head">
-        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} unique cards · ${units} total units</p></div>
+        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} tracked · ${portfolioCards.length} owned · ${ownedUnits} owned units</p></div>
       </div>
       <div class="toolbar">
         <div class="filters" aria-label="Filter by card series">
@@ -584,7 +607,7 @@ function renderCards() {
         </div>
         <button class="primary-button dark" data-action="add"><img src="images/icons/icon-add.svg" alt=""/><span>ADD CARD</span></button>
       </div>
-      <div class="cards-grid">
+      <div class="cards-grid" data-card-grid>
         ${
           filtered.length
             ? filtered.map(renderCardTile).join("")
@@ -598,12 +621,15 @@ function renderCards() {
 function renderCardTile(card) {
   const series = SERIES[card.series] || { color: "#c8ff34" };
   return `
-    <article class="card-tile" data-action="details" data-id="${html(card.id)}" tabindex="0" role="button" aria-label="View ${html(card.title)} card details">
-      <div class="card-art">${renderArt(card)}<span class="quantity-pill">× ${card.quantity}</span></div>
-      <div class="card-body">
-        <div class="card-meta"><span class="series-name" style="color:${series.color}">${html(card.series)}</span><span class="card-code">${html(card.code)}</span></div>
-        <div class="card-price-row"><div class="card-price-stack"><strong class="card-price">${money(unitPhp(card))}</strong><small>${nativeMoney(card.nativePrice, card.currency)}</small></div><span class="price-change ${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "↗ +" : "↘ "}${card.change.toFixed(1)}%</span></div>
-      </div>
+    <article class="card-tile" data-id="${html(card.id)}" draggable="true">
+      <button class="card-open" data-action="details" data-id="${html(card.id)}" aria-label="View ${html(card.title)} card details">
+        <div class="card-art">${renderArt(card)}<span class="quantity-pill">× ${card.quantity}</span><span class="ownership-pill ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ OWNED" : "WATCHING"}</span></div>
+        <div class="card-body">
+          <div class="card-meta"><span class="series-name" style="color:${series.color}">${html(card.series)}</span><span class="card-code">${html(card.code)}</span></div>
+          <div class="card-price-row"><div class="card-price-stack"><strong class="card-price">${money(unitPhp(card))}</strong><small>${nativeMoney(card.nativePrice, card.currency)}</small></div><span class="price-change ${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "↗ +" : "↘ "}${card.change.toFixed(1)}%</span></div>
+        </div>
+      </button>
+      <button class="drag-handle" type="button" data-drag-handle aria-label="Drag ${html(card.title)} to reorder, or use arrow keys" title="Drag to reorder"><span></span><span></span><span></span><span></span><span></span><span></span></button>
     </article>
   `;
 }
@@ -690,6 +716,7 @@ function renderCardForm(card = null) {
     currency: "JPY",
     nativePrice: "",
     image: "",
+    owned: true,
   };
   const importStatus = !isEdit && pendingCardImport
     ? `Imported directly from Yuyu-tei.${pendingCardImport.availability === "OutOfStock" ? " This listing is currently out of stock." : ""}`
@@ -703,6 +730,7 @@ function renderCardForm(card = null) {
           <div class="field"><label for="card-series">Card series</label><select id="card-series" name="series">${Object.keys(SERIES).map((series) => `<option ${series === value.series ? "selected" : ""}>${html(series)}</option>`).join("")}</select></div>
           <div class="two-fields"><div class="field"><label for="card-code">Card code</label><input id="card-code" name="code" value="${html(value.code)}" placeholder="OP08-106" required/></div><div class="field"><label for="card-title">Card name</label><input id="card-title" name="title" value="${html(value.title)}" placeholder="Nami" required/></div></div>
           <div class="two-fields"><div class="field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" step="1" value="${value.quantity}" required/></div><div class="field"><label for="card-currency">Currency</label><select id="card-currency" name="currency"><option ${value.currency === "JPY" ? "selected" : ""}>JPY</option><option ${value.currency === "USD" ? "selected" : ""}>USD</option></select></div></div>
+          <label class="ownership-control"><input name="owned" type="checkbox" ${value.owned !== false ? "checked" : ""}/><span class="ownership-checkbox">✓</span><span class="ownership-copy"><strong>CARD I OWN</strong><small>Only owned cards and their quantities are included in the dashboard.</small></span></label>
           <div class="field"><label for="native-price">Current source price</label><input id="native-price" name="nativePrice" type="number" min="0" step="0.01" value="${value.nativePrice}" placeholder="3200" required/></div>
         </div>
         <div class="image-upload"><div class="preview-card" id="image-preview">${value.image ? `<img src="${html(value.image)}" alt="Card preview"/>` : `<div class="preview-placeholder">${icon("image")}<span>IMAGE PREVIEW</span></div>`}</div><label class="upload-button">UPLOAD YOUR OWN<input id="image-file" type="file" accept="image/png,image/jpeg,image/webp"/></label><input type="hidden" name="image" value="${html(value.image)}"/></div>
@@ -719,7 +747,7 @@ function renderDetailsModal() {
   const series = SERIES[card.series] || { color: "#6f7900" };
   const labels = ["SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG"];
   return modalShell(
-    `<div class="modal-body"><div class="details-layout"><div class="detail-art">${renderArt(card)}</div><div class="details-copy"><div class="details-title-row"><div><div class="details-series" style="color:${series.color}">${html(card.series)}</div><div class="details-code">${html(card.code)} · ${html(card.title)}</div></div><button class="edit-detail-button" data-action="edit" data-id="${html(card.id)}">EDIT</button></div><div class="detail-price">${money(unitPhp(card))}</div><div class="detail-native">${nativeMoney(card.nativePrice, card.currency)} per card · ${card.quantity} ${card.quantity === 1 ? "copy" : "copies"}</div><div class="detail-stats"><div class="detail-stat"><span>Total value</span><strong>${money(phpValue(card))}</strong></div><div class="detail-stat"><span>24h move</span><strong class="${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}%</strong></div><div class="detail-stat"><span>Last checked</span><strong>${formatDate(card.lastChecked)}</strong></div></div><div class="detail-source">Price source: <a href="${html(safeUrl(card.sourceUrl))}" target="_blank" rel="noreferrer">${html(card.sourceUrl)}</a></div><div class="modal-chart-tabs">${["MAX", "1M", "3M", "6M", "1Y"].map((range) => `<button class="range-button ${range === "1Y" ? "active" : ""}">${range}</button>`).join("")}</div>${chartSvg(card.history.map((price) => price * state.rates[card.currency]), labels, series.color, `detail-${html(card.id)}`, "detail-chart")}</div></div></div>`,
+    `<div class="modal-body"><div class="details-layout"><div class="detail-art">${renderArt(card)}</div><div class="details-copy"><div class="details-title-row"><div><div class="details-series" style="color:${series.color}">${html(card.series)}</div><div class="details-code">${html(card.code)} · ${html(card.title)}</div></div><button class="edit-detail-button" data-action="edit" data-id="${html(card.id)}">EDIT</button></div><div class="detail-price">${money(unitPhp(card))}</div><div class="detail-native">${nativeMoney(card.nativePrice, card.currency)} per card · ${card.quantity} ${card.quantity === 1 ? "copy" : "copies"}</div><div class="detail-ownership ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ Card I own · Included in dashboard" : "Watching · Not included in dashboard"}</div><div class="detail-stats"><div class="detail-stat"><span>Total value</span><strong>${money(phpValue(card))}</strong></div><div class="detail-stat"><span>24h move</span><strong class="${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}%</strong></div><div class="detail-stat"><span>Last checked</span><strong>${formatDate(card.lastChecked)}</strong></div></div><div class="detail-source">Price source: <a href="${html(safeUrl(card.sourceUrl))}" target="_blank" rel="noreferrer">${html(card.sourceUrl)}</a></div><div class="modal-chart-tabs">${["MAX", "1M", "3M", "6M", "1Y"].map((range) => `<button class="range-button ${range === "1Y" ? "active" : ""}">${range}</button>`).join("")}</div>${chartSvg(card.history.map((price) => price * state.rates[card.currency]), labels, series.color, `detail-${html(card.id)}`, "detail-chart")}</div></div></div>`,
     { title: "Card details", className: "wide" },
   );
 }
@@ -755,11 +783,166 @@ function bindEvents() {
   document.querySelector("#rates-form")?.addEventListener("submit", saveRates);
   document.querySelector("#card-form")?.addEventListener("submit", saveCard);
   document.querySelector("#image-file")?.addEventListener("change", handleImageUpload);
+  const cardGrid = document.querySelector("[data-card-grid]");
+  if (cardGrid) {
+    cardGrid.addEventListener("dragover", handleCardDragOver);
+    cardGrid.addEventListener("drop", finishNativeCardDrag);
+    cardGrid.querySelectorAll(".card-tile").forEach((tile) => {
+      tile.addEventListener("dragstart", startNativeCardDrag);
+      tile.addEventListener("dragend", finishNativeCardDrag);
+    });
+    cardGrid.querySelectorAll("[data-drag-handle]").forEach((handle) => {
+      handle.addEventListener("pointerdown", startPointerCardDrag);
+      handle.addEventListener("keydown", reorderCardWithKeyboard);
+    });
+  }
+}
+
+function reorderDraggedTile(draggedTile, targetTile, clientX, clientY) {
+  if (!draggedTile || !targetTile || draggedTile === targetTile) return false;
+  const targetRect = targetTile.getBoundingClientRect();
+  const draggedRect = draggedTile.getBoundingClientRect();
+  const sameRow = Math.abs(targetRect.top - draggedRect.top) < Math.min(targetRect.height, draggedRect.height) / 2;
+  const placeAfter = sameRow ? clientX > targetRect.left + targetRect.width / 2 : clientY > targetRect.top + targetRect.height / 2;
+  const reference = placeAfter ? targetTile.nextElementSibling : targetTile;
+  if (reference === draggedTile || (!reference && draggedTile === targetTile.parentElement.lastElementChild)) return false;
+  targetTile.parentElement.insertBefore(draggedTile, reference);
+  return true;
+}
+
+function commitCardOrder(grid) {
+  const visibleIds = [...grid.querySelectorAll(".card-tile")].map((tile) => tile.dataset.id);
+  const visibleSet = new Set(visibleIds);
+  const cardsById = new Map(state.cards.map((card) => [card.id, card]));
+  let visibleIndex = 0;
+  const reordered = state.cards.map((card) => (visibleSet.has(card.id) ? cardsById.get(visibleIds[visibleIndex++]) : card));
+  const changed = reordered.some((card, index) => card.id !== state.cards[index]?.id);
+  if (!changed) return;
+  state.cards = reordered;
+  state.cards.forEach((card, index) => {
+    card.sortOrder = index;
+  });
+  saveState();
+  render();
+  backend.reorderCards(state.cards).catch((error) => toast(`Card order sync failed: ${error.message}`));
+  toast("Card order saved.");
+}
+
+function startNativeCardDrag(event) {
+  if (backend.isConfigured && !state.user) {
+    event.preventDefault();
+    toast("Sign in with Google to save a custom card order.");
+    return;
+  }
+  const tile = event.currentTarget;
+  nativeCardDrag = { tile, grid: tile.parentElement, moved: false };
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", tile.dataset.id);
+  }
+  requestAnimationFrame(() => tile.classList.add("is-dragging"));
+}
+
+function handleCardDragOver(event) {
+  if (!nativeCardDrag) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  const targetTile = event.target.closest(".card-tile");
+  if (reorderDraggedTile(nativeCardDrag.tile, targetTile, event.clientX, event.clientY)) nativeCardDrag.moved = true;
+}
+
+function finishNativeCardDrag(event) {
+  if (!nativeCardDrag) return;
+  event.preventDefault?.();
+  const { tile, grid, moved } = nativeCardDrag;
+  nativeCardDrag = null;
+  tile.classList.remove("is-dragging");
+  if (moved) {
+    suppressCardOpenUntil = Date.now() + 350;
+    commitCardOrder(grid);
+  }
+}
+
+function startPointerCardDrag(event) {
+  if (!event.isPrimary || event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (backend.isConfigured && !state.user) {
+    toast("Sign in with Google to save a custom card order.");
+    return;
+  }
+  const handle = event.currentTarget;
+  const tile = handle.closest(".card-tile");
+  handle.setPointerCapture(event.pointerId);
+  pointerCardDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    handle,
+    tile,
+    grid: tile.parentElement,
+    moved: false,
+  };
+  window.addEventListener("pointermove", movePointerCardDrag, { passive: false });
+  window.addEventListener("pointerup", finishPointerCardDrag);
+  window.addEventListener("pointercancel", finishPointerCardDrag);
+}
+
+function reorderCardWithKeyboard(event) {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (backend.isConfigured && !state.user) {
+    toast("Sign in with Google to save a custom card order.");
+    return;
+  }
+  const tile = event.currentTarget.closest(".card-tile");
+  const sibling = ["ArrowLeft", "ArrowUp"].includes(event.key) ? tile.previousElementSibling : tile.nextElementSibling;
+  if (!sibling?.classList.contains("card-tile")) return;
+  if (["ArrowLeft", "ArrowUp"].includes(event.key)) sibling.before(tile);
+  else sibling.after(tile);
+  const cardId = tile.dataset.id;
+  commitCardOrder(tile.parentElement);
+  requestAnimationFrame(() => {
+    const movedTile = [...document.querySelectorAll(".card-tile")].find((item) => item.dataset.id === cardId);
+    movedTile?.querySelector("[data-drag-handle]")?.focus();
+  });
+}
+
+function movePointerCardDrag(event) {
+  if (!pointerCardDrag || event.pointerId !== pointerCardDrag.pointerId) return;
+  const distance = Math.hypot(event.clientX - pointerCardDrag.startX, event.clientY - pointerCardDrag.startY);
+  if (!pointerCardDrag.moved && distance < 7) return;
+  event.preventDefault();
+  if (!pointerCardDrag.moved) {
+    pointerCardDrag.moved = true;
+    pointerCardDrag.tile.classList.add("is-dragging");
+    document.body.classList.add("is-reordering");
+  }
+  const targetTile = document.elementFromPoint(event.clientX, event.clientY)?.closest(".card-tile");
+  reorderDraggedTile(pointerCardDrag.tile, targetTile, event.clientX, event.clientY);
+}
+
+function finishPointerCardDrag(event) {
+  if (!pointerCardDrag || event.pointerId !== pointerCardDrag.pointerId) return;
+  const { handle, tile, grid, moved, pointerId } = pointerCardDrag;
+  pointerCardDrag = null;
+  window.removeEventListener("pointermove", movePointerCardDrag);
+  window.removeEventListener("pointerup", finishPointerCardDrag);
+  window.removeEventListener("pointercancel", finishPointerCardDrag);
+  if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+  tile.classList.remove("is-dragging");
+  document.body.classList.remove("is-reordering");
+  if (moved) {
+    suppressCardOpenUntil = Date.now() + 350;
+    commitCardOrder(grid);
+  }
 }
 
 async function handleAction(event) {
   const target = event.currentTarget;
   const action = target.dataset.action;
+  if (action === "details" && Date.now() < suppressCardOpenUntil) return;
   if (action === "navigate") {
     state.page = target.dataset.page;
     state.filter = "ALL";
@@ -910,6 +1093,7 @@ async function saveCard(event) {
     currency: String(data.get("currency")),
     nativePrice,
     image,
+    owned: data.get("owned") === "on",
     lastChecked: new Date().toISOString(),
   };
   if (editingId) {
@@ -931,12 +1115,16 @@ async function saveCard(event) {
     });
     toast("Card added to your collection.");
   }
+  state.cards.forEach((card, index) => {
+    card.sortOrder = index;
+  });
   const savedCard = editingId ? state.cards.find((card) => card.id === editingId) : state.cards.find((card) => card.id === cardId);
   try {
     await backend.saveCard(savedCard, unitPhp(savedCard));
   } catch (error) {
     toast(`Cloud card save failed: ${error.message}`);
   }
+  if (!editingId) backend.reorderCards(state.cards).catch((error) => toast(`Card order sync failed: ${error.message}`));
   pendingImageFile = null;
   clearPendingCardImport();
   state.modal = null;
