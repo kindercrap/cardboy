@@ -902,7 +902,7 @@ async function fetchPreview() {
       document.querySelector("#image-preview").innerHTML = `<img src="${html(card.image)}" alt="Fetched card preview"/>`;
     }
     const fields = [card.title, card.code, card.nativePrice, card.image].filter(Boolean).length;
-    status.textContent = card.image ? "Details and product image fetched from the source." : "Details fetched; this page did not expose a product image.";
+    status.textContent = card.notice || (card.image ? "Details and product image fetched from the source." : "Details fetched; this page did not expose a product image.");
     toast(`${fields} card details fetched from the source.`);
   } catch (error) {
     status.textContent = error.message;

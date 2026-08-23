@@ -6,6 +6,7 @@ export type ExtractedCard = {
   nativePrice: number | null;
   currency: "JPY" | "USD";
   sourceUrl: string;
+  notice?: string;
 };
 
 function allowedHosts() {
@@ -59,6 +60,12 @@ function inferSeries(url: URL, text: string) {
   return "OTHER";
 }
 
+function yuyuImage(url: URL) {
+  if (!/(^|\.)yuyu-tei\.jp$/i.test(url.hostname)) return "";
+  const parts = url.pathname.match(/\/sell\/([^/]+)\/card\/([^/]+)\/(\d+)/i);
+  return parts ? `https://card.yuyu-tei.jp/${parts[1]}/front/${parts[2]}/${parts[3]}.jpg` : "";
+}
+
 export async function extractCard(source: string): Promise<ExtractedCard> {
   const url = new URL(source);
   if (url.protocol !== "https:") throw new Error("Only HTTPS card pages are supported.");
@@ -67,12 +74,30 @@ export async function extractCard(source: string): Promise<ExtractedCard> {
     redirect: "follow",
     signal: AbortSignal.timeout(12000),
     headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; CardBoy/1.0; card price monitor)",
-      Accept: "text/html,application/xhtml+xml",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+      Referer: `${url.origin}/`,
     },
   });
-  if (!response.ok) throw new Error(`The source returned HTTP ${response.status}.`);
+  if (!response.ok) {
+    const fallbackImage = yuyuImage(url);
+    if (response.status === 403 && fallbackImage) {
+      return {
+        title: "",
+        code: "",
+        series: inferSeries(url, ""),
+        image: fallbackImage,
+        nativePrice: null,
+        currency: "JPY",
+        sourceUrl: url.href,
+        notice: "Product image fetched. Yuyu-tei blocks cloud price reads, so enter the current price manually.",
+      };
+    }
+    throw new Error(`The source returned HTTP ${response.status}.`);
+  }
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("text/html")) throw new Error("The URL is not an HTML card page.");
   const body = await response.text();
@@ -95,10 +120,7 @@ export async function extractCard(source: string): Promise<ExtractedCard> {
   const description = String(product?.description || metaContent(body, "description") || metaContent(body, "og:description") || "");
   const code = `${description} ${title}`.toUpperCase().match(/(?:OP|ST|EB|PRB|P|GD|UA|FB|SV)[A-Z0-9/-]{2,20}-\d{2,4}/)?.[0] || "";
   let image = String(productImage || metaContent(body, "og:image") || metaContent(body, "twitter:image") || "");
-  if (!image && /(^|\.)yuyu-tei\.jp$/i.test(url.hostname)) {
-    const parts = url.pathname.match(/\/sell\/([^/]+)\/card\/([^/]+)\/(\d+)/i);
-    if (parts) image = `https://card.yuyu-tei.jp/${parts[1]}/front/${parts[2]}/${parts[3]}.jpg`;
-  }
+  if (!image) image = yuyuImage(url);
   if (image) {
     const imageUrl = new URL(image, url);
     image = ["http:", "https:"].includes(imageUrl.protocol) ? imageUrl.href : "";
