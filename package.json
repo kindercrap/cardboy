@@ -1,0 +1,14 @@
+{
+  "name": "cardboy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A responsive trading-card price and portfolio monitor.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check app.js && node --check backend.js && node --check server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

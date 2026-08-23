@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="198.5" height="34" viewBox="0 0 198.5 34">
+  <g id="cardboy-logo" transform="translate(-28.5 -19.5)">
+    <text id="CARDBOY" transform="translate(60 46)" fill="#fff" font-size="26" font-family="Signal-Heavy, Signal" font-weight="800"><tspan x="0" y="0">CARD</tspan><tspan y="0" fill="#ceff43">BOY</tspan></text>
+    <g id="Group_42" data-name="Group 42">
+      <g id="Group_1" data-name="Group 1">
+        <g id="card-boy-logo" transform="translate(305 102)">
+          <rect id="Rectangle_2" data-name="Rectangle 2" width="24" height="31" rx="7" transform="translate(-275 -81)" fill="none" stroke="#ceff43" stroke-width="3"/>
+        </g>
+        <path id="alien-svgrepo-com" d="M8,16,3.542,12.338a7,7,0,1,1,8.916,0ZM3,6H5A2,2,0,0,1,7,8V9L3,7.5Zm8,0A2,2,0,0,0,9,8V9l4-1.5V6Z" transform="translate(34 29)" fill="#ceff43" fill-rule="evenodd"/>
+      </g>
+    </g>
+  </g>
+</svg>
