@@ -134,7 +134,7 @@ Use server-side extraction for unattended monitoring wherever the source permits
 - Free Supabase project in Singapore with Postgres, Storage, Auth, and Row Level Security
 - Google OAuth published for external Google accounts
 - Authenticated `extract-card` and `daily-price-check` Edge Functions
-- GitHub Actions daily Yuyu-tei monitor included at `15 1 * * *` (09:15 Asia/Manila)
+- Active GitHub Actions daily Yuyu-tei monitor at `15 1 * * *` (09:15 Asia/Manila)
 - The repository contains only the browser-safe Supabase publishable key; server and OAuth secrets stay in their respective cloud dashboards
 
 ## GitHub
