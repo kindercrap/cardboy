@@ -1,3 +1,5 @@
+import { extractCardValueImage, isCardValueCardUrl, parseCardValuePage } from "./card-value.js";
+
 export type ExtractedCard = {
   title: string;
   code: string;
@@ -10,7 +12,7 @@ export type ExtractedCard = {
 };
 
 function allowedHosts() {
-  return new Set((Deno.env.get("ALLOWED_SOURCE_HOSTS") || "yuyu-tei.jp,www.yuyu-tei.jp").split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
+  return new Set((Deno.env.get("ALLOWED_SOURCE_HOSTS") || "yuyu-tei.jp,www.yuyu-tei.jp,card-value.jp,www.card-value.jp").split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
 }
 
 function decodeEntities(value = "") {
@@ -70,6 +72,19 @@ export async function extractCard(source: string): Promise<ExtractedCard> {
   const url = new URL(source);
   if (url.protocol !== "https:") throw new Error("Only HTTPS card pages are supported.");
   if (!allowedHosts().has(url.hostname.toLowerCase())) throw new Error(`This source is not enabled yet: ${url.hostname}`);
+  const fallbackImage = yuyuImage(url);
+  if (fallbackImage) {
+    return {
+      title: "",
+      code: "",
+      series: inferSeries(url, ""),
+      image: fallbackImage,
+      nativePrice: null,
+      currency: "JPY",
+      sourceUrl: url.href,
+      notice: "CardBoy does not scrape Yuyutei pages directly. Paste the matching Card-Value card URL or use the bookmark importer.",
+    };
+  }
   const response = await fetch(url, {
     redirect: "follow",
     signal: AbortSignal.timeout(12000),
@@ -83,25 +98,28 @@ export async function extractCard(source: string): Promise<ExtractedCard> {
     },
   });
   if (!response.ok) {
-    const fallbackImage = yuyuImage(url);
-    if (response.status === 403 && fallbackImage) {
-      return {
-        title: "",
-        code: "",
-        series: inferSeries(url, ""),
-        image: fallbackImage,
-        nativePrice: null,
-        currency: "JPY",
-        sourceUrl: url.href,
-        notice: "Product image fetched. Yuyu-tei blocks cloud price reads, so enter the current price manually.",
-      };
-    }
     throw new Error(`The source returned HTTP ${response.status}.`);
   }
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("text/html")) throw new Error("The URL is not an HTML card page.");
   const body = await response.text();
   if (body.length > 3_000_000) throw new Error("The source page is too large to process.");
+
+  if (isCardValueCardUrl(url.href)) {
+    const parsed = parseCardValuePage(body, url.href);
+    return {
+      title: parsed.cardName,
+      code: parsed.cardNumber,
+      series: "ONE PIECE",
+      image: extractCardValueImage(body, url.href),
+      nativePrice: parsed.yuyuteiPrice,
+      currency: "JPY",
+      sourceUrl: url.href,
+      notice: parsed.yuyuteiPrice === null
+        ? "Card-Value does not list a Yuyutei selling price for this variant."
+        : "Yuyutei selling price extracted from Card-Value's store-by-store selling table.",
+    };
+  }
 
   let product: Record<string, unknown> | null = null;
   for (const match of body.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {

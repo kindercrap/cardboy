@@ -247,6 +247,7 @@ async function loadCloudPortfolio() {
       title: card.title,
       quantity: card.quantity,
       sourceUrl: card.source_url,
+      cardValueUrl: card.card_value_url || null,
       currency: card.source_currency,
       nativePrice: Number(card.source_price),
       image: card.image_url || "",
@@ -255,7 +256,7 @@ async function loadCloudPortfolio() {
       change: Number(card.change_percent || 0),
       lastChecked: card.last_checked || card.updated_at,
       monitorStatus: card.monitor_status || "pending",
-      monitorMessage: card.monitor_message || "Waiting for the next scheduled catalog check.",
+      monitorMessage: card.monitor_message || "Waiting for the next scheduled Card-Value check.",
       monitorCheckedAt: card.monitor_checked_at || null,
       history: padHistory(snapshots.get(card.id) || [], card.source_price),
     }));
@@ -357,14 +358,14 @@ function monitoringInfo(card) {
     return {
       className: "active",
       label: "PRICE MONITORED",
-      detail: "Automatic daily price monitoring is active for this exact Yuyu-tei variant.",
+      detail: "Automatic daily monitoring reads this exact variant's Yuyutei selling price via Card-Value.",
     };
   }
   if (card.monitorStatus === "unsupported") {
     return {
       className: "manual",
       label: "MANUAL UPDATE",
-      detail: card.monitorMessage || "This exact variant is not currently available in the automatic price catalog. Use the bookmark importer to update it.",
+      detail: card.monitorMessage || "Card-Value does not currently list a Yuyutei selling price for this exact variant. Use the bookmark importer for updates.",
     };
   }
   return {
@@ -468,7 +469,7 @@ function renderHeader() {
         <span>$1 = ₱${state.rates.USD.toFixed(2)}</span>
         <button class="rate-edit" data-action="rates">${state.ratesCustomized ? "CUSTOM" : "EDIT RATES"}</button>
       </div>
-      <div class="sync-status"><span class="sync-dot"></span><span>YUYU DAILY CHECK · ${DAILY_CHECK_LABEL}</span></div>
+      <div class="sync-status"><span class="sync-dot"></span><span>YUYUTEI VIA CARD-VALUE · ${DAILY_CHECK_LABEL}</span></div>
     </div>
   `;
 }
@@ -726,7 +727,7 @@ function renderNotificationsModal() {
   const items = state.notifications;
   return modalShell(
     `<div class="notification-modal-body">
-      <div class="notification-summary"><p>Price movement alerts from manual checks and the daily Yuyu-tei catalog.</p><span>Daily check: ${DAILY_CHECK_LABEL}</span></div>
+      <div class="notification-summary"><p>Price movement alerts from manual checks and Card-Value's Yuyutei selling table.</p><span>Daily check: ${DAILY_CHECK_LABEL}</span></div>
       <div class="notification-list">
         ${
           items.length
@@ -1151,6 +1152,9 @@ async function saveCard(event) {
   }
   const payload = {
     sourceUrl: String(data.get("sourceUrl")).trim(),
+    cardValueUrl: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
+      ? existing.cardValueUrl || null
+      : null,
     series: String(data.get("series")),
     code: String(data.get("code")).trim().toUpperCase(),
     title: String(data.get("title")).trim(),
@@ -1164,8 +1168,8 @@ async function saveCard(event) {
       ? existing.monitorStatus || "pending"
       : "pending",
     monitorMessage: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
-      ? existing.monitorMessage || "Waiting for the next scheduled catalog check."
-      : "Waiting for the next scheduled catalog check.",
+      ? existing.monitorMessage || "Waiting for the next scheduled Card-Value check."
+      : "Waiting for the next scheduled Card-Value check.",
     monitorCheckedAt: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
       ? existing.monitorCheckedAt || null
       : null,

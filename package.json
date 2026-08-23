@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check app.js && node --check backend.js && node --check server.mjs"
+    "check": "node --check app.js && node --check backend.js && node --check server.mjs && node --check scripts/monitor-prices.mjs && node --check supabase/functions/_shared/card-value.js",
+    "test": "node --test tests/card-value-scraper.test.mjs"
   },
   "engines": {
     "node": ">=18"

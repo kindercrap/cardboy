@@ -61,19 +61,28 @@ export const backend = {
 
   async loadPortfolio() {
     if (!client || !currentUser) return null;
-    const [cardsResult, snapshotsResult, ratesResult, fxResult, notificationsResult] = await Promise.all([
+    const [cardsResult, snapshotsResult, dailyObservationsResult, ratesResult, fxResult, notificationsResult] = await Promise.all([
       client.from("cards").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true }),
       client.from("price_snapshots").select("card_id,source_price,checked_at").order("checked_at", { ascending: true }),
+      client.from("daily_price_observations").select("card_id,price,observed_at").order("observed_at", { ascending: true }),
       client.from("user_rates").select("*").maybeSingle(),
       client.from("fx_rates").select("currency,php_rate,fetched_at"),
       client.from("notifications").select("*").order("created_at", { ascending: false }).limit(30),
     ]);
-    for (const result of [cardsResult, snapshotsResult, ratesResult, fxResult, notificationsResult]) {
+    for (const result of [cardsResult, snapshotsResult, dailyObservationsResult, ratesResult, fxResult, notificationsResult]) {
       if (result.error) throw result.error;
     }
+    const snapshots = [
+      ...(snapshotsResult.data || []),
+      ...(dailyObservationsResult.data || []).map((observation) => ({
+        card_id: observation.card_id,
+        source_price: observation.price,
+        checked_at: observation.observed_at,
+      })),
+    ].sort((left, right) => String(left.checked_at).localeCompare(String(right.checked_at)));
     return {
       cards: cardsResult.data || [],
-      snapshots: snapshotsResult.data || [],
+      snapshots,
       rates: ratesResult.data,
       fxRates: fxResult.data || [],
       notifications: notificationsResult.data || [],
@@ -90,6 +99,7 @@ export const backend = {
       title: card.title,
       quantity: card.quantity,
       source_url: card.sourceUrl,
+      card_value_url: card.cardValueUrl || null,
       source_currency: card.currency,
       source_price: card.nativePrice,
       image_url: card.image,
@@ -98,7 +108,7 @@ export const backend = {
       change_percent: card.change || 0,
       last_checked: card.lastChecked,
       monitor_status: card.monitorStatus || "pending",
-      monitor_message: card.monitorMessage || "Waiting for the next scheduled catalog check.",
+      monitor_message: card.monitorMessage || "Waiting for the next scheduled Card-Value check.",
       monitor_checked_at: card.monitorCheckedAt || null,
       updated_at: new Date().toISOString(),
     };

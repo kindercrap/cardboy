@@ -1,6 +1,13 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { extractCard } from "../_shared/extract.ts";
+import {
+  calculatePriceMovement,
+  canonicalExternalUrl,
+  createCardValueScraper,
+  isCardValueCardUrl,
+  isYuyuteiOnePieceSellingUrl,
+  resolveSavedCardValueListings,
+} from "../_shared/card-value.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -57,7 +64,74 @@ async function updateFxRates(service: any) {
   }
 }
 
-Deno.serve(async (request: Request) => {
+function philippineObservationDay(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
+async function storeDailyObservation(service: any, card: any, listing: any, observedAt: string) {
+  const observationDay = philippineObservationDay(new Date(observedAt));
+  const existingQuery = await service.from("daily_price_observations")
+    .select("id,price_change,percentage_change")
+    .eq("user_id", card.user_id)
+    .eq("card_id", card.id)
+    .eq("source", "yuyutei")
+    .eq("source_via", "card-value.jp")
+    .eq("observation_day", observationDay)
+    .maybeSingle();
+  if (existingQuery.error) throw existingQuery.error;
+  if (existingQuery.data) {
+    return {
+      stored: false,
+      priceChange: Number(existingQuery.data.price_change ?? 0),
+      percentageChange: Number(existingQuery.data.percentage_change ?? 0),
+    };
+  }
+
+  const previousQuery = await service.from("daily_price_observations")
+    .select("price")
+    .eq("user_id", card.user_id)
+    .eq("card_id", card.id)
+    .eq("source", "yuyutei")
+    .eq("source_via", "card-value.jp")
+    .lt("observation_day", observationDay)
+    .order("observation_day", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (previousQuery.error) throw previousQuery.error;
+  const previousPrice = previousQuery.data ? Number(previousQuery.data.price) : null;
+  const currentPrice = Number(listing.yuyuteiPrice);
+  const { priceChange, percentageChange } = calculatePriceMovement(currentPrice, previousPrice);
+  const inserted = await service.from("daily_price_observations").upsert({
+    user_id: card.user_id,
+    card_id: card.id,
+    card_number: listing.cardNumber || card.code || "UNKNOWN",
+    variant: listing.variant,
+    card_value_url: listing.cardValueUrl,
+    yuyutei_url: listing.yuyuteiUrl,
+    price: currentPrice,
+    currency: "JPY",
+    source: "yuyutei",
+    source_via: "card-value.jp",
+    price_change: priceChange,
+    percentage_change: percentageChange,
+    observed_at: observedAt,
+    observation_day: observationDay,
+  }, {
+    onConflict: "user_id,card_id,source,source_via,observation_day",
+    ignoreDuplicates: true,
+  }).select("id");
+  if (inserted.error) throw inserted.error;
+  return { stored: Boolean(inserted.data?.length), previousPrice, priceChange, percentageChange };
+}
+
+Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -82,47 +156,94 @@ Deno.serve(async (request: Request) => {
 
     const grouped = new Map<string, any[]>();
     for (const card of cards || []) {
-      const list = grouped.get(card.source_url) || [];
-      list.push(card);
-      grouped.set(card.source_url, list);
-    }
-    let checked = 0;
-    let movements = 0;
-    const maxSources = Number(Deno.env.get("MAX_SOURCES_PER_RUN") || 100);
-    for (const [sourceUrl, linkedCards] of [...grouped.entries()].slice(0, maxSources)) {
       try {
-        const extracted = await extractCard(sourceUrl);
-        checked += 1;
-        if (!extracted.nativePrice) continue;
-        for (const card of linkedCards) {
-          const oldPrice = Number(card.source_price);
-          const nextPrice = Number(extracted.nativePrice);
-          const change = oldPrice ? Number((((nextPrice - oldPrice) / oldPrice) * 100).toFixed(1)) : 0;
-          const checkedAt = new Date().toISOString();
-          await service.from("cards").update({
-            source_price: nextPrice,
-            source_currency: extracted.currency,
-            image_url: extracted.image || card.image_url,
-            change_percent: change,
-            last_checked: checkedAt,
-            updated_at: checkedAt,
-          }).eq("user_id", card.user_id).eq("id", card.id);
-          if (nextPrice !== oldPrice) {
-            movements += 1;
-            const { data: fx } = await service.from("fx_rates").select("php_rate").eq("currency", extracted.currency).maybeSingle();
-            const phpPrice = Math.round(nextPrice * Number(fx?.php_rate || 1));
-            await Promise.all([
-              service.from("price_snapshots").insert({ user_id: card.user_id, card_id: card.id, source_price: nextPrice, source_currency: extracted.currency, php_price: phpPrice, checked_at: checkedAt }),
-              service.from("notifications").insert({ user_id: card.user_id, card_id: card.id, title: `${card.title} ${change >= 0 ? "increased" : "decreased"} ${Math.abs(change).toFixed(1)}%`, message: `Now ${extracted.currency} ${nextPrice.toLocaleString()} (PHP ${phpPrice.toLocaleString()}) per card.`, change_percent: change, automatic }),
-            ]);
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      } catch (error) {
-        console.warn(`Source check failed for ${sourceUrl}:`, error instanceof Error ? error.message : error);
+        const sourceKey = canonicalExternalUrl(card.source_url);
+        const list = grouped.get(sourceKey) || [];
+        list.push(card);
+        grouped.set(sourceKey, list);
+      } catch {
+        // Invalid saved URLs cannot be checked.
       }
     }
-    return json({ checked, movements, automatic });
+    const maxSources = Number(Deno.env.get("MAX_SOURCES_PER_RUN") || 100);
+    const selectedEntries = [...grouped.entries()].slice(0, maxSources);
+    const selectedCards = selectedEntries.flatMap((entry) => entry[1]);
+    const scraper = createCardValueScraper({
+      concurrency: 2,
+      minimumDelayMs: 700,
+      maximumDelayMs: 1300,
+      retries: 3,
+    });
+    const listings = await resolveSavedCardValueListings(selectedCards, { scraper });
+    const { data: fx } = await service.from("fx_rates").select("php_rate").eq("currency", "JPY").maybeSingle();
+    const jpyPhpRate = Number(fx?.php_rate || 1);
+
+    let checked = 0;
+    let movements = 0;
+    let observations = 0;
+    let unsupported = 0;
+    for (const [sourceKey, linkedCards] of selectedEntries) {
+      const sourceUrl = linkedCards[0]?.source_url || sourceKey;
+      const listing = listings.get(sourceKey);
+      if (!listing || !Number.isFinite(listing.yuyuteiPrice) || listing.yuyuteiPrice <= 0) {
+        unsupported += 1;
+        const message = isCardValueCardUrl(sourceUrl) || isYuyuteiOnePieceSellingUrl(sourceUrl)
+          ? "Card-Value does not currently list a Yuyutei selling price for this exact variant. Use the bookmark importer for updates."
+          : "Automatic monitoring currently supports One Piece variants that Card-Value maps to a Yuyutei selling listing.";
+        for (const card of linkedCards) {
+          await service.from("cards").update({
+            monitor_status: "unsupported",
+            monitor_message: message,
+            monitor_checked_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).eq("user_id", card.user_id).eq("id", card.id);
+        }
+        continue;
+      }
+
+      checked += 1;
+      const checkedAt = listing.checkedAt || new Date().toISOString();
+      for (const card of linkedCards) {
+        const nextPrice = Number(listing.yuyuteiPrice);
+        const observation = await storeDailyObservation(service, card, listing, checkedAt);
+        if (observation.stored) observations += 1;
+        await service.from("cards").update({
+          source_price: nextPrice,
+          source_currency: "JPY",
+          card_value_url: listing.cardValueUrl,
+          ...(observation.stored && observation.percentageChange !== null ? { change_percent: observation.percentageChange } : {}),
+          last_checked: checkedAt,
+          monitor_status: "active",
+          monitor_message: "Automatic daily monitoring reads this exact variant's Yuyutei selling price via Card-Value.",
+          monitor_checked_at: checkedAt,
+          updated_at: checkedAt,
+        }).eq("user_id", card.user_id).eq("id", card.id);
+
+        if (!observation.stored || observation.priceChange === null || observation.priceChange === 0) continue;
+        movements += 1;
+        const phpPrice = Math.round(nextPrice * jpyPhpRate);
+        const change = Number(observation.percentageChange);
+        await Promise.all([
+          service.from("price_snapshots").insert({
+            user_id: card.user_id,
+            card_id: card.id,
+            source_price: nextPrice,
+            source_currency: "JPY",
+            php_price: phpPrice,
+            checked_at: checkedAt,
+          }),
+          service.from("notifications").insert({
+            user_id: card.user_id,
+            card_id: card.id,
+            title: `${card.title} ${change >= 0 ? "increased" : "decreased"} ${Math.abs(change).toFixed(2)}%`,
+            message: `Yuyutei selling price is now JPY ${nextPrice.toLocaleString()} (PHP ${phpPrice.toLocaleString()}) per card via Card-Value.`,
+            change_percent: change,
+            automatic,
+          }),
+        ]);
+      }
+    }
+    return json({ checked, observations, movements, unsupported, automatic, sourceVia: "card-value.jp" });
   } catch (error) {
     return json(
       { error: error instanceof Error ? error.message : "Price check failed." },

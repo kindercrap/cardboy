@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { extname, join, normalize } from "node:path";
+import { extractCardValueImage, isCardValueCardUrl, parseCardValuePage } from "./supabase/functions/_shared/card-value.js";
 
 const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4173);
@@ -120,7 +121,36 @@ function inferSeries(url, text) {
   return "ONE PIECE";
 }
 
+function yuyuteiFallbackCard(url) {
+  const parts = url.pathname.match(/\/sell\/([^/]+)\/card\/([^/]+)\/(\d+)/i);
+  return {
+    title: "",
+    code: "",
+    series: inferSeries(url, ""),
+    image: parts ? `https://card.yuyu-tei.jp/${parts[1]}/front/${parts[2]}/${parts[3]}.jpg` : "",
+    nativePrice: null,
+    currency: "JPY",
+    sourceUrl: url.href,
+    notice: "CardBoy does not scrape Yuyutei pages directly. Paste the matching Card-Value card URL or use the bookmark importer.",
+  };
+}
+
 function extractCard(body, finalUrl) {
+  if (isCardValueCardUrl(finalUrl.href)) {
+    const parsed = parseCardValuePage(body, finalUrl.href);
+    return {
+      title: parsed.cardName,
+      code: parsed.cardNumber,
+      series: "ONE PIECE",
+      image: extractCardValueImage(body, finalUrl.href),
+      nativePrice: parsed.yuyuteiPrice,
+      currency: "JPY",
+      sourceUrl: finalUrl.href,
+      notice: parsed.yuyuteiPrice === null
+        ? "Card-Value does not list a Yuyutei selling price for this variant."
+        : "Yuyutei selling price extracted from Card-Value's store-by-store selling table.",
+    };
+  }
   let product = null;
   const scripts = body.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
   for (const match of scripts) {
@@ -168,6 +198,10 @@ createServer(async (request, response) => {
       const sourceUrl = requestUrl.searchParams.get("url");
       if (!sourceUrl) return json(response, 400, { error: "A card page URL is required." });
       try {
+        const validated = await validatePublicUrl(sourceUrl);
+        if (/(^|\.)yuyu-tei\.jp$/i.test(validated.hostname)) {
+          return json(response, 200, { card: yuyuteiFallbackCard(validated) });
+        }
         const { body, finalUrl } = await fetchPage(sourceUrl);
         return json(response, 200, { card: extractCard(body, finalUrl) });
       } catch (error) {
