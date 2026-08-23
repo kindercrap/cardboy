@@ -2,6 +2,20 @@ const config = window.CARDBOY_CONFIG || {};
 let client = null;
 let currentUser = null;
 
+async function functionError(error, fallback) {
+  let message = error?.message || fallback;
+  try {
+    const response = error?.context;
+    if (response && typeof response.clone === "function") {
+      const payload = await response.clone().json();
+      if (payload?.error) message = payload.error;
+    }
+  } catch {
+    // Keep the SDK message when the response is not JSON.
+  }
+  return new Error(message);
+}
+
 export const backend = {
   get isConfigured() {
     return Boolean(config.supabaseUrl && config.supabasePublishableKey);
@@ -129,14 +143,14 @@ export const backend = {
   async extractCard(url) {
     if (!client || !currentUser) throw new Error("Sign in before fetching a card source.");
     const { data, error } = await client.functions.invoke("extract-card", { body: { url } });
-    if (error) throw error;
+    if (error) throw await functionError(error, "The card source could not be fetched.");
     return data.card;
   },
 
   async checkPrices() {
     if (!client || !currentUser) throw new Error("Sign in before checking prices.");
     const { data, error } = await client.functions.invoke("daily-price-check", { body: { manual: true } });
-    if (error) throw error;
+    if (error) throw await functionError(error, "The price check could not be started.");
     return data;
   },
 

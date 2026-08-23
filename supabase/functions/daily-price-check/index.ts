@@ -1,6 +1,49 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { withSupabase } from "jsr:@supabase/server@^1";
+import { createClient } from "jsr:@supabase/supabase-js@2";
 import { extractCard } from "../_shared/extract.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cardboy-cron-secret",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function bearerToken(request: Request) {
+  const authorization = request.headers.get("Authorization") || "";
+  return authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+}
+
+function isAutomaticRequest(request: Request) {
+  const provided = request.headers.get("x-cardboy-cron-secret")
+    || request.headers.get("apikey")
+    || bearerToken(request);
+  const accepted = [
+    Deno.env.get("DAILY_CHECK_SECRET"),
+    Deno.env.get("SUPABASE_SECRET_KEY"),
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
+  ].filter(Boolean);
+  return Boolean(provided && accepted.includes(provided));
+}
+
+async function userClient(request: Request) {
+  const authorization = request.headers.get("Authorization");
+  const url = Deno.env.get("SUPABASE_URL");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!authorization?.startsWith("Bearer ") || !url || !anonKey) return null;
+  const client = createClient(url, anonKey, {
+    global: { headers: { Authorization: authorization } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await client.auth.getUser();
+  return error || !data.user ? null : client;
+}
 
 async function updateFxRates(service: any) {
   try {
@@ -14,15 +57,25 @@ async function updateFxRates(service: any) {
   }
 }
 
-async function handler(request: Request, ctx: any) {
+Deno.serve(async (request: Request) => {
+  if (request.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
   if (request.method !== "POST") {
-    return Response.json({ error: "Method not allowed." }, { status: 405 });
+    return json({ error: "Method not allowed." }, 405);
   }
 
   try {
-    const automatic = ctx.authMode === "secret";
-    const service = ctx.supabaseAdmin;
-    const cardsClient = automatic ? service : ctx.supabase;
+    const url = Deno.env.get("SUPABASE_URL");
+    const serviceKey = Deno.env.get("SUPABASE_SECRET_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!url || !serviceKey) throw new Error("Supabase service credentials are not configured.");
+    const service = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    const automatic = isAutomaticRequest(request);
+    const authenticatedUserClient = automatic ? null : await userClient(request);
+    if (!automatic && !authenticatedUserClient) {
+      return json({ error: "Sign in with Google before checking prices." }, 401);
+    }
+    const cardsClient = automatic ? service : authenticatedUserClient!;
     await updateFxRates(service);
     const { data: cards, error } = await cardsClient.from("cards").select("*").not("source_url", "is", null).limit(500);
     if (error) throw error;
@@ -69,13 +122,11 @@ async function handler(request: Request, ctx: any) {
         console.warn(`Source check failed for ${sourceUrl}:`, error instanceof Error ? error.message : error);
       }
     }
-    return Response.json({ checked, movements, automatic });
+    return json({ checked, movements, automatic });
   } catch (error) {
-    return Response.json(
+    return json(
       { error: error instanceof Error ? error.message : "Price check failed." },
-      { status: 500 },
+      500,
     );
   }
-}
-
-export default { fetch: withSupabase({ auth: ["user", "secret"] }, handler) };
+});
