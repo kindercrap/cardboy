@@ -1,45 +1,51 @@
-const monitorUserAgent = "Mozilla/5.0 (compatible; CardBoyPriceMonitor/1.0; +https://github.com/kindercrap/cardboy)";
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const catalogBaseUrl = "https://opcollector.com/";
+const monitorUserAgent = "CardBoyPriceMonitor/1.0 (+https://github.com/kindercrap/cardboy)";
 
-function productRecords(html) {
-  const records = [];
-  const pattern = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-  for (const match of html.matchAll(pattern)) {
-    try {
-      const value = JSON.parse(match[1].trim());
-      const items = Array.isArray(value) ? value : [value];
-      for (const item of items) records.push(...(Array.isArray(item?.["@graph"]) ? item["@graph"] : [item]));
-    } catch {
-      // Ignore malformed JSON-LD blocks and continue to the next one.
-    }
-  }
-  return records;
+function canonicalSourceUrl(value) {
+  const url = new URL(value);
+  url.hash = "";
+  url.search = "";
+  return url.href.replace(/\/$/, "").toLowerCase();
 }
 
-async function extractYuyuListing(sourceUrl) {
-  const url = new URL(sourceUrl);
-  if (!/(^|\.)yuyu-tei\.jp$/i.test(url.hostname)) throw new Error("unsupported source host");
+async function publicJson(url) {
   const response = await fetch(url, {
-    headers: {
-      "User-Agent": monitorUserAgent,
-      Accept: "text/html,application/xhtml+xml",
-      "Accept-Language": "ja,en;q=0.8",
-    },
+    headers: { "User-Agent": monitorUserAgent, Accept: "application/json" },
     signal: AbortSignal.timeout(20_000),
   });
-  if (!response.ok) throw new Error(`source returned HTTP ${response.status}`);
-  const product = productRecords(await response.text()).find((item) => item?.["@type"] === "Product");
-  if (!product) throw new Error("Product JSON-LD was not found");
-  const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
-  const nativePrice = Number(String(offer?.price ?? "").replace(/[^0-9.]/g, ""));
-  if (!Number.isFinite(nativePrice) || nativePrice <= 0) throw new Error("a valid listed price was not found");
-  return {
-    code: String(product.description || "").trim(),
-    title: String(product.name || "").trim(),
-    nativePrice,
-    currency: String(offer?.priceCurrency || "JPY").toUpperCase(),
-    image: Array.isArray(product.image) ? String(product.image[0] || "") : String(product.image || ""),
-  };
+  if (!response.ok) throw new Error(`price catalog returned HTTP ${response.status}`);
+  return response.json();
+}
+
+function sourceSetCode(sourceUrl) {
+  const match = new URL(sourceUrl).pathname.match(/\/sell\/opc\/card\/([^/]+)\//i);
+  return match?.[1]?.toLowerCase() || "";
+}
+
+async function loadPriceCatalog(sourceUrls) {
+  const manifest = await publicJson(new URL("data/manifest.json", catalogBaseUrl));
+  const entries = new Map(manifest.sets.map((set) => [String(set.code).toLowerCase(), set.jp]));
+  const codes = [...new Set(sourceUrls.map(sourceSetCode).filter(Boolean))];
+  const databases = await Promise.all(codes.map(async (code) => {
+    const entry = entries.get(code);
+    if (!entry?.file) return null;
+    return publicJson(new URL(`${entry.file}?v=${entry.v}`, catalogBaseUrl));
+  }));
+  const catalog = new Map();
+  for (const database of databases.filter(Boolean)) {
+    for (const card of database.cards || []) {
+      if (!card.sourceUrl || card.source !== "Yuyutei") continue;
+      catalog.set(canonicalSourceUrl(card.sourceUrl), {
+        code: String(card.cardNumber || "").trim(),
+        title: String(card.name || "").trim(),
+        nativePrice: Number(card.marketValue),
+        currency: String(card.currency || "JPY").toUpperCase(),
+        image: String(card.imageUrl || ""),
+        catalogUpdatedAt: manifest.generatedAt,
+      });
+    }
+  }
+  return { catalog, generatedAt: manifest.generatedAt };
 }
 
 async function rest(path, { method = "GET", body, prefer } = {}) {
@@ -100,13 +106,17 @@ async function monitor() {
     linked.push(card);
     grouped.set(card.source_url, linked);
   }
+  const { catalog, generatedAt } = await loadPriceCatalog([...grouped.keys()]);
 
   let checked = 0;
   let movements = 0;
   let failed = 0;
   for (const [sourceUrl, linkedCards] of grouped) {
     try {
-      const listing = await extractYuyuListing(sourceUrl);
+      const listing = catalog.get(canonicalSourceUrl(sourceUrl));
+      if (!listing || !Number.isFinite(listing.nativePrice) || listing.nativePrice <= 0) {
+        throw new Error("the exact Yuyu-tei variant is not in the daily catalog");
+      }
       const checkedAt = new Date().toISOString();
       checked += 1;
       for (const card of linkedCards) {
@@ -159,18 +169,20 @@ async function monitor() {
       }
     } catch (error) {
       failed += 1;
-      console.warn(`One Yuyu-tei source failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      console.warn(`One saved Yuyu-tei source could not be matched: ${error instanceof Error ? error.message : "unknown error"}`);
     }
-    await delay(750);
   }
-  console.log(`CardBoy monitor finished: ${checked} sources checked, ${movements} price movements, ${failed} source failures.`);
+  console.log(`CardBoy monitor finished using the OP Collector catalog (${generatedAt || "unknown update time"}): ${checked} sources checked, ${movements} price movements, ${failed} unmatched sources.`);
   if (grouped.size > 0 && checked === 0) throw new Error("No Yuyu-tei source could be checked from this runner.");
 }
 
 const probeIndex = process.argv.indexOf("--probe");
 if (probeIndex >= 0) {
-  const listing = await extractYuyuListing(process.argv[probeIndex + 1]);
-  console.log(`Yuyu-tei probe succeeded: ${listing.code || "card"}, ${listing.currency} ${listing.nativePrice}.`);
+  const sourceUrl = process.argv[probeIndex + 1];
+  const { catalog, generatedAt } = await loadPriceCatalog([sourceUrl]);
+  const listing = catalog.get(canonicalSourceUrl(sourceUrl));
+  if (!listing) throw new Error("The exact Yuyu-tei listing was not found in the OP Collector daily catalog.");
+  console.log(`Catalog probe succeeded: ${listing.code || "card"}, ${listing.currency} ${listing.nativePrice}; catalog updated ${generatedAt || "at an unknown time"}.`);
 } else {
   await monitor();
 }

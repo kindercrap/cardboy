@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       probe_only:
-        description: Test whether this GitHub runner can read one public Yuyu-tei listing
+        description: Test an exact Yuyu-tei variant against the public daily price catalog
         required: false
         type: boolean
         default: false
@@ -24,11 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
-      - name: Probe Yuyu-tei access
+          node-version: 24
+      - name: Probe exact Yuyu-tei variant in the daily catalog
         if: ${{ inputs.probe_only == true }}
         run: node scripts/monitor-prices.mjs --probe https://yuyu-tei.jp/sell/opc/card/op05/10155
       - name: Check saved cards and create alerts

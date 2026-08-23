@@ -44,7 +44,7 @@ Yuyu-tei currently blocks CardBoy's Supabase server from reading its product pag
 
 The importer only prefills the form and never saves a card without confirmation. It runs on the Yuyu-tei page at the user's request, so no F12/Console workflow or paid proxy is required.
 
-In local preview mode, the 9:15 AM PHT fallback schedule runs while the local app server and browser page are open. In production, `.github/workflows/price-monitor.yml` runs unattended at 01:15 UTC / 09:15 PHT. It reads each distinct saved Yuyu-tei URL once, updates matching cards, stores history only when a price moves, and creates in-app notifications. GitHub may start scheduled workflows a few minutes late during busy periods.
+In local preview mode, the 9:15 AM PHT fallback schedule runs while the local app server and browser page are open. In production, `.github/workflows/price-monitor.yml` runs unattended at 01:15 UTC / 09:15 PHT. Yuyu-tei blocks both Supabase and GitHub datacenter requests, so the workflow matches each exact saved Yuyu-tei source URL against OP Collector's public daily catalog. It updates matching cards, stores history only when a price moves, and creates in-app notifications. GitHub may start scheduled workflows a few minutes late during busy periods.
 
 ## Free production deployment
 
@@ -57,7 +57,7 @@ The production files are already included:
 - `supabase/setup-cron.sql`: the daily 09:00 PHT schedule
 - `.github/workflows/pages.yml`: free GitHub Pages deployment
 - `.github/workflows/price-monitor.yml`: free 09:15 PHT Yuyu-tei monitoring from a GitHub-hosted runner
-- `scripts/monitor-prices.mjs`: rate-limited Yuyu-tei JSON-LD reader and Supabase updater
+- `scripts/monitor-prices.mjs`: exact-variant OP Collector catalog matcher and Supabase updater
 - `backend.js`: automatic cloud/local adapter
 
 ### 1. Create and configure Supabase
@@ -103,7 +103,7 @@ Create these encrypted repository secrets under **GitHub → cardboy → Setting
 
 Never place the secret key in `config.js`, source code, a browser, or a workflow log. The monitor uses it only inside the GitHub Actions runner to read saved source URLs and write card prices, snapshots, FX rates, and notifications. The public browser app continues to use the low-privilege publishable key plus Row Level Security.
 
-After adding both secrets, open **Actions → Monitor Yuyu-tei prices → Run workflow** for the first full check. Scheduled checks then begin daily at 09:15 PHT. A manual `probe_only` run tests whether the runner can read one public Yuyu-tei listing without accessing CardBoy account data.
+After adding both secrets, open **Actions → Monitor Yuyu-tei prices → Run workflow** for the first full check. Scheduled checks then begin daily at 09:15 PHT. A manual `probe_only` run verifies the example Yuyu-tei source URL against the public catalog without accessing CardBoy account data.
 
 ## Recommended production stack
 
@@ -114,7 +114,7 @@ The selected low-maintenance stack is:
 - Database: Supabase Postgres with Row Level Security
 - Card images: Supabase Storage
 - Scheduled Yuyu-tei checks: GitHub Actions at 09:15 PHT, using encrypted repository secrets
-- Source extraction: a rate-limited JSON-LD reader for Yuyu-tei plus Edge Function adapters for other permitted sources
+- Scheduled price source: OP Collector's public daily catalog, matched by the exact Yuyu-tei source URL
 - Exchange rates: a server-side daily call to a reliable FX provider, cached in the database
 - Backend hosting: Supabase Edge Functions/Database plus GitHub Actions; GitHub Pages only hosts the frontend and does not run `server.mjs`.
 
@@ -126,7 +126,7 @@ Suggested tables:
 - `user_rates`: `user_id`, `currency`, `custom_rate`, `use_live_rate`, `updated_at`
 - `fx_rates`: `currency`, `php_rate`, `fetched_at`
 
-Use server-side extraction for unattended monitoring wherever the source permits it. The Yuyu-tei bookmark importer is intentionally user-triggered and reads only the page's public Product JSON-LD. Respect each source's terms and robots policy, rate-limit scheduled requests, and keep the last valid price when extraction fails.
+Use server-side extraction for unattended monitoring wherever the source permits it. OP Collector is an independent third-party dependency and not an official Yuyu-tei API, so CardBoy keeps the last valid price if its catalog is unavailable or an exact variant is missing. The Yuyu-tei bookmark importer remains the exact browser-side fallback and reads only the page's public Product JSON-LD at the user's request.
 
 ## Current production status
 

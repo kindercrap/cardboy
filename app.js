@@ -443,7 +443,7 @@ function renderHeader() {
         <span>$1 = ₱${state.rates.USD.toFixed(2)}</span>
         <button class="rate-edit" data-action="rates">${state.ratesCustomized ? "CUSTOM" : "EDIT RATES"}</button>
       </div>
-      <div class="sync-status"><span class="sync-dot"></span><span>DAILY CHECK · ${DAILY_CHECK_LABEL}</span></div>
+      <div class="sync-status"><span class="sync-dot"></span><span>YUYU DAILY CHECK · ${DAILY_CHECK_LABEL}</span></div>
     </div>
   `;
 }
@@ -699,7 +699,7 @@ function renderNotificationsModal() {
   const items = state.notifications;
   return modalShell(
     `<div class="notification-modal-body">
-      <div class="notification-summary"><p>Price movement alerts from manual and scheduled checks.</p><span>Daily check: ${DAILY_CHECK_LABEL}</span></div>
+      <div class="notification-summary"><p>Price movement alerts from manual checks and the daily Yuyu-tei catalog.</p><span>Daily check: ${DAILY_CHECK_LABEL}</span></div>
       <div class="notification-list">
         ${
           items.length
