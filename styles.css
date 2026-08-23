@@ -1101,6 +1101,66 @@ h1 {
   padding: 22px 26px 26px;
 }
 
+.import-helper {
+  margin-bottom: 18px;
+  padding: 12px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #d8dfaf;
+  border-radius: 11px;
+  background: #f1f5dc;
+}
+
+.import-helper > div {
+  display: grid;
+  gap: 3px;
+}
+
+.import-helper strong {
+  color: #222710;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.import-helper small {
+  max-width: 390px;
+  color: #626849;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.import-bookmark {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #7b861f;
+  border-radius: 8px;
+  color: #252b0b;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  cursor: grab;
+  background: #c1ff25;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.import-bookmark:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(102, 123, 17, 0.18);
+  background: #ceff52;
+}
+
+.field small.import-success {
+  color: #667514;
+  font-weight: 800;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(190px, 0.7fr);
@@ -1934,6 +1994,16 @@ h1 {
 
   .modal-body {
     padding: 18px;
+  }
+
+  .import-helper {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .import-bookmark {
+    width: 100%;
   }
 
   .form-grid,

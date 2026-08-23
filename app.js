@@ -1,6 +1,7 @@
 import { backend } from "./backend.js";
 
 const STORAGE_KEY = "cardboy-demo-v1";
+const CARD_IMPORT_KEY = "cardboy-pending-import-v1";
 const APP_SCHEMA_VERSION = 3;
 const DAILY_CHECK_HOUR = 9;
 const DAILY_CHECK_LABEL = "9:00 AM PHT";
@@ -74,6 +75,7 @@ const initialState = {
 };
 
 let state = loadState();
+let pendingCardImport = loadPendingCardImport();
 let pendingImageFile = null;
 let backendSyncInProgress = false;
 const app = document.querySelector("#app");
@@ -113,6 +115,70 @@ function saveState() {
   } catch {
     toast("That image is too large for browser storage. Try a smaller file.");
   }
+}
+
+function normalizeCardImport(value) {
+  if (!value || typeof value !== "object") return null;
+  const sourceUrl = safeUrl(value.sourceUrl);
+  if (sourceUrl === "#") return null;
+  const imageUrl = safeUrl(value.image);
+  const nativePrice = Number(value.nativePrice);
+  return {
+    sourceUrl,
+    series: Object.hasOwn(SERIES, value.series) ? value.series : "ONE PIECE",
+    code: String(value.code || "").trim().slice(0, 80),
+    title: String(value.title || "").trim().slice(0, 220),
+    quantity: Math.max(1, Number.parseInt(value.quantity, 10) || 1),
+    currency: ["JPY", "USD"].includes(value.currency) ? value.currency : "JPY",
+    nativePrice: Number.isFinite(nativePrice) && nativePrice >= 0 ? nativePrice : "",
+    image: imageUrl === "#" ? "" : imageUrl,
+    availability: String(value.availability || "").replace(/[^a-z]/gi, "").slice(0, 40),
+  };
+}
+
+function loadPendingCardImport() {
+  const currentUrl = new URL(location.href);
+  const incoming = currentUrl.searchParams.get("cardImport");
+  let value = null;
+  try {
+    value = incoming ? JSON.parse(incoming) : JSON.parse(sessionStorage.getItem(CARD_IMPORT_KEY));
+  } catch {
+    value = null;
+  }
+  const normalized = normalizeCardImport(value);
+  if (normalized) sessionStorage.setItem(CARD_IMPORT_KEY, JSON.stringify(normalized));
+  else sessionStorage.removeItem(CARD_IMPORT_KEY);
+  if (incoming !== null) {
+    currentUrl.searchParams.delete("cardImport");
+    history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash || "#cards"}`);
+  }
+  return normalized;
+}
+
+function clearPendingCardImport() {
+  pendingCardImport = null;
+  sessionStorage.removeItem(CARD_IMPORT_KEY);
+}
+
+function activatePendingCardImport() {
+  if (!pendingCardImport) return;
+  const targetModal = backend.isConfigured && !backend.user ? "login" : "add";
+  if (state.page === "cards" && state.modal === targetModal) return;
+  state.page = "cards";
+  state.filter = "ALL";
+  state.activeCardId = null;
+  state.modal = targetModal;
+  history.replaceState(null, "", "#cards");
+  render();
+  if (state.modal === "add") {
+    requestAnimationFrame(() => document.querySelector("#card-quantity")?.select());
+    toast("Yuyu-tei card details imported. Review the quantity, then add the card.");
+  }
+}
+
+function yuyuImporterBookmarklet() {
+  const appUrl = `${location.origin}${location.pathname}`;
+  return `javascript:(()=>{try{const a=[...document.querySelectorAll('script[type="application/ld+json"]')].flatMap(s=>{try{const j=JSON.parse(s.textContent);return Array.isArray(j)?j:[j]}catch{return[]}}).flatMap(j=>j['@graph']||[j]),p=a.find(x=>x&&x['@type']==='Product');if(!p)throw Error('Product data was not found on this page.');const o=Array.isArray(p.offers)?p.offers[0]:p.offers,d={sourceUrl:location.href,series:location.pathname.includes('/opc/')?'ONE PIECE':'ONE PIECE',code:p.description||'',title:p.name||'',quantity:1,currency:o?.priceCurrency||'JPY',nativePrice:Number(o?.price||0),image:Array.isArray(p.image)?p.image[0]:p.image||'',availability:String(o?.availability||'').split('/').pop()},u=${JSON.stringify(appUrl)}+'?cardImport='+encodeURIComponent(JSON.stringify(d))+'#cards',w=open(u,'_blank');if(w)w.opener=null;else location.href=u}catch(e){alert('CardBoy importer: '+e.message)}})()`;
 }
 
 function initialsFor(user) {
@@ -201,10 +267,14 @@ async function applyBackendUser(user) {
     saveState();
     render();
   }
+  activatePendingCardImport();
 }
 
 async function initializeProductionBackend() {
-  if (!backend.isConfigured) return;
+  if (!backend.isConfigured) {
+    activatePendingCardImport();
+    return;
+  }
   try {
     state.user = null;
     render();
@@ -611,7 +681,7 @@ function renderRatesModal() {
 
 function renderCardForm(card = null) {
   const isEdit = Boolean(card);
-  const value = card || {
+  const value = card || pendingCardImport || {
     sourceUrl: "",
     series: "ONE PIECE",
     code: "",
@@ -621,11 +691,15 @@ function renderCardForm(card = null) {
     nativePrice: "",
     image: "",
   };
+  const importStatus = !isEdit && pendingCardImport
+    ? `Imported directly from Yuyu-tei.${pendingCardImport.availability === "OutOfStock" ? " This listing is currently out of stock." : ""}`
+    : "Fetches the card name, code, source price, and product image when available.";
   return modalShell(
     `<form class="modal-body" id="card-form" data-editing="${isEdit ? html(card.id) : ""}">
+      ${!isEdit ? `<div class="import-helper"><div><strong>ONE-CLICK YUYU-TEI IMPORT</strong><small>Drag this button to your browser bookmarks bar once. On any Yuyu-tei card page, click the bookmark to open CardBoy with every available detail filled in.</small></div><a class="import-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this button to your bookmarks bar">DRAG TO BOOKMARKS</a></div>` : ""}
       <div class="form-grid">
         <div class="form-fields">
-          <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">FETCH</button></div><small id="fetch-status">Fetches the card name, code, source price, and product image when available.</small></div>
+          <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">FETCH</button></div><small id="fetch-status"${pendingCardImport && !isEdit ? ' class="import-success"' : ""}>${html(importStatus)}</small></div>
           <div class="field"><label for="card-series">Card series</label><select id="card-series" name="series">${Object.keys(SERIES).map((series) => `<option ${series === value.series ? "selected" : ""}>${html(series)}</option>`).join("")}</select></div>
           <div class="two-fields"><div class="field"><label for="card-code">Card code</label><input id="card-code" name="code" value="${html(value.code)}" placeholder="OP08-106" required/></div><div class="field"><label for="card-title">Card name</label><input id="card-title" name="title" value="${html(value.title)}" placeholder="Nami" required/></div></div>
           <div class="two-fields"><div class="field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" step="1" value="${value.quantity}" required/></div><div class="field"><label for="card-currency">Currency</label><select id="card-currency" name="currency"><option ${value.currency === "JPY" ? "selected" : ""}>JPY</option><option ${value.currency === "USD" ? "selected" : ""}>USD</option></select></div></div>
@@ -748,6 +822,7 @@ async function handleAction(event) {
       toast("Sign in with Google to add cards to your cloud collection.");
       return;
     }
+    clearPendingCardImport();
     pendingImageFile = null;
     state.activeCardId = null;
     openModal("add");
@@ -789,6 +864,7 @@ function openModal(name) {
 }
 
 function closeModal() {
+  if (pendingCardImport && ["add", "login"].includes(state.modal)) clearPendingCardImport();
   state.modal = null;
   render();
 }
@@ -862,6 +938,7 @@ async function saveCard(event) {
     toast(`Cloud card save failed: ${error.message}`);
   }
   pendingImageFile = null;
+  clearPendingCardImport();
   state.modal = null;
   state.filter = "ALL";
   state.page = "cards";

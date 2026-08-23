@@ -29,6 +29,18 @@ Open `http://127.0.0.1:4173`.
 
 The local server and production Edge Function read common Product JSON-LD and Open Graph metadata, including Yuyu-tei product records. A source can still block automated requests or omit price/image metadata; CardBoy keeps the last valid data and shows a clear fetch error in that case. Only explicitly enabled source hosts that permit server access can be monitored.
 
+## One-click Yuyu-tei import
+
+Yuyu-tei currently blocks CardBoy's Supabase server from reading its product pages. The Add Card window therefore includes a free browser bookmark importer for user-initiated imports:
+
+1. Open CardBoy and choose **Add Card**.
+2. Drag **Drag to Bookmarks** to the browser bookmarks bar once.
+3. Open a Yuyu-tei card page and click the saved bookmark.
+4. CardBoy opens in a new tab with the source URL, card code, name, currency, listed price, image, and availability already read from the page's Product JSON-LD.
+5. Review the quantity and click **Add Card**.
+
+The importer only prefills the form and never saves a card without confirmation. It runs on the Yuyu-tei page at the user's request, so no F12/Console workflow or paid proxy is required. It does not replace unattended daily monitoring; that still requires a source which permits scheduled server requests.
+
 In local preview mode, the 9:00 AM PHT schedule runs while the local app server and browser page are open. In production, Supabase Cron invokes the Edge Function unattended at 01:00 UTC / 09:00 PHT. The published deployment uses real Google OAuth and stores each signed-in user's collection separately under Row Level Security.
 
 ## Free production deployment
@@ -97,7 +109,7 @@ Suggested tables:
 - `user_rates`: `user_id`, `currency`, `custom_rate`, `use_live_rate`, `updated_at`
 - `fx_rates`: `currency`, `php_rate`, `fetched_at`
 
-Do not scrape card pages in the browser: CORS, store markup changes, and exposed implementation details make that unreliable. Parse supported sources server-side, respect each source's terms and robots policy, rate-limit requests, and keep the last valid price when extraction fails.
+Use server-side extraction for unattended monitoring wherever the source permits it. The Yuyu-tei bookmark importer is intentionally user-triggered and reads only the page's public Product JSON-LD. Respect each source's terms and robots policy, rate-limit scheduled requests, and keep the last valid price when extraction fails.
 
 ## Current production status
 
