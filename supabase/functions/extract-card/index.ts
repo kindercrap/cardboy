@@ -1,14 +1,24 @@
-import { corsHeaders, json } from "../_shared/cors.ts";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { withSupabase } from "jsr:@supabase/server@^1";
 import { extractCard } from "../_shared/extract.ts";
 
-Deno.serve(async (request) => {
-  if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
+async function handler(request: Request) {
+  if (request.method !== "POST") {
+    return Response.json({ error: "Method not allowed." }, { status: 405 });
+  }
+
   try {
     const { url } = await request.json();
-    if (!url) return json({ error: "A card page URL is required." }, 400);
-    return json({ card: await extractCard(url) });
+    if (!url) {
+      return Response.json({ error: "A card page URL is required." }, { status: 400 });
+    }
+    return Response.json({ card: await extractCard(url) });
   } catch (error) {
-    return json({ error: error instanceof Error ? error.message : "The source page could not be read." }, 422);
+    return Response.json(
+      { error: error instanceof Error ? error.message : "The source page could not be read." },
+      { status: 422 },
+    );
   }
-});
+}
+
+export default { fetch: withSupabase({ auth: "user" }, handler) };

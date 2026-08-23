@@ -1,7 +1,7 @@
 project_id = "cardboy"
 
 [functions.extract-card]
-verify_jwt = true
+verify_jwt = false
 
 [functions.daily-price-check]
 verify_jwt = false

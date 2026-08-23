@@ -29,7 +29,7 @@ Open `http://127.0.0.1:4173`.
 
 The local server and production Edge Function read common Product JSON-LD and Open Graph metadata, including Yuyu-tei product records. A source can still block automated requests or omit price/image metadata; CardBoy keeps the last valid data and shows a clear fetch error in that case. Only explicitly enabled source hosts that permit server access can be monitored.
 
-In local preview mode, the 9:00 AM PHT schedule runs while the local app server and browser page are open. In production, Supabase Cron invokes the Edge Function unattended at 01:00 UTC / 09:00 PHT. Google login remains a clearly labeled demo until Supabase and Google OAuth credentials are configured.
+In local preview mode, the 9:00 AM PHT schedule runs while the local app server and browser page are open. In production, Supabase Cron invokes the Edge Function unattended at 01:00 UTC / 09:00 PHT. The published deployment uses real Google OAuth and stores each signed-in user's collection separately under Row Level Security.
 
 ## Free production deployment
 
@@ -99,27 +99,17 @@ Suggested tables:
 
 Do not scrape card pages in the browser: CORS, store markup changes, and exposed implementation details make that unreliable. Parse supported sources server-side, respect each source's terms and robots policy, rate-limit requests, and keep the last valid price when extraction fails.
 
-## Before production
+## Current production status
 
-1. Create the Supabase project and Google OAuth credentials.
-2. Replace the storage helpers in `app.js` with authenticated database calls.
-3. Implement and test source-specific parser adapters in a server environment.
-4. Move image uploads to private per-user storage paths.
-5. Add scheduled price checks, failure reporting, and real FX-rate retrieval.
-6. Add tests for currency conversion, ownership rules, scraper fixtures, and quantity totals.
-7. Add a privacy policy before enabling public Google sign-in.
+- Live frontend: `https://kindercrap.github.io/cardboy/`
+- Free Supabase project in Singapore with Postgres, Storage, Auth, and Row Level Security
+- Google OAuth published for external Google accounts
+- Authenticated `extract-card` and `daily-price-check` Edge Functions
+- Active Supabase Cron job at `0 1 * * *` (09:00 Asia/Manila)
+- The repository contains only the browser-safe Supabase publishable key; server and OAuth secrets stay in their respective cloud dashboards
 
 ## GitHub
 
-The project is ready to initialize and publish when desired:
+Repository: `https://github.com/kindercrap/cardboy`
 
-```bash
-git init
-git add .
-git commit -m "Build CardBoy portfolio prototype"
-git branch -M main
-git remote add origin https://github.com/kindercrap/cardboy.git
-git push -u origin main
-```
-
-Review the target repository first if it already contains work; do not force-push over existing history.
+Pushes to `main` automatically deploy the static frontend through `.github/workflows/pages.yml`.

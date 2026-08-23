@@ -1,22 +1,8 @@
-import { createClient } from "npm:@supabase/supabase-js@2";
-import { corsHeaders, json } from "../_shared/cors.ts";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { withSupabase } from "jsr:@supabase/server@^1";
 import { extractCard } from "../_shared/extract.ts";
 
-const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const service = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-
-async function requester(request: Request) {
-  const authorization = request.headers.get("authorization") || "";
-  if (authorization === `Bearer ${serviceKey}`) return { userId: null, automatic: true };
-  const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } }, auth: { persistSession: false } });
-  const { data } = await userClient.auth.getUser();
-  if (!data.user) throw new Error("Unauthorized");
-  return { userId: data.user.id, automatic: false };
-}
-
-async function updateFxRates() {
+async function updateFxRates(service: any) {
   try {
     const response = await fetch("https://api.frankfurter.app/latest?from=PHP&to=JPY,USD", { signal: AbortSignal.timeout(8000) });
     if (!response.ok) return;
@@ -28,18 +14,20 @@ async function updateFxRates() {
   }
 }
 
-Deno.serve(async (request) => {
-  if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
+async function handler(request: Request, ctx: any) {
+  if (request.method !== "POST") {
+    return Response.json({ error: "Method not allowed." }, { status: 405 });
+  }
+
   try {
-    const { userId, automatic } = await requester(request);
-    await updateFxRates();
-    let query = service.from("cards").select("*").not("source_url", "is", null).limit(500);
-    if (userId) query = query.eq("user_id", userId);
-    const { data: cards, error } = await query;
+    const automatic = ctx.authMode === "secret";
+    const service = ctx.supabaseAdmin;
+    const cardsClient = automatic ? service : ctx.supabase;
+    await updateFxRates(service);
+    const { data: cards, error } = await cardsClient.from("cards").select("*").not("source_url", "is", null).limit(500);
     if (error) throw error;
 
-    const grouped = new Map<string, typeof cards>();
+    const grouped = new Map<string, any[]>();
     for (const card of cards || []) {
       const list = grouped.get(card.source_url) || [];
       list.push(card);
@@ -81,9 +69,13 @@ Deno.serve(async (request) => {
         console.warn(`Source check failed for ${sourceUrl}:`, error instanceof Error ? error.message : error);
       }
     }
-    return json({ checked, movements, automatic });
+    return Response.json({ checked, movements, automatic });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Price check failed.";
-    return json({ error: message }, message === "Unauthorized" ? 401 : 500);
+    return Response.json(
+      { error: error instanceof Error ? error.message : "Price check failed." },
+      { status: 500 },
+    );
   }
-});
+}
+
+export default { fetch: withSupabase({ auth: ["user", "secret"] }, handler) };
