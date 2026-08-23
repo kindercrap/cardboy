@@ -4,7 +4,8 @@ const STORAGE_KEY = "cardboy-demo-v1";
 const CARD_IMPORT_KEY = "cardboy-pending-import-v1";
 const APP_SCHEMA_VERSION = 4;
 const DAILY_CHECK_HOUR = 9;
-const DAILY_CHECK_LABEL = "9:00 AM PHT";
+const DAILY_CHECK_MINUTE = 15;
+const DAILY_CHECK_LABEL = "9:15 AM PHT";
 
 const SERIES = {
   "ONE PIECE": { color: "#ffd43b", bg: "#cc5d26", shape: "#ffd43b", mark: "OP" },
@@ -175,19 +176,40 @@ function clearPendingCardImport() {
   sessionStorage.removeItem(CARD_IMPORT_KEY);
 }
 
+function canonicalSourceUrl(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.search = "";
+    return url.href.replace(/\/$/, "").toLowerCase();
+  } catch {
+    return String(value || "").trim().replace(/\/$/, "").toLowerCase();
+  }
+}
+
+function importedCardMatch() {
+  if (!pendingCardImport) return null;
+  const importedSource = canonicalSourceUrl(pendingCardImport.sourceUrl);
+  return state.cards.find((card) => canonicalSourceUrl(card.sourceUrl) === importedSource) || null;
+}
+
 function activatePendingCardImport() {
   if (!pendingCardImport) return;
-  const targetModal = backend.isConfigured && !backend.user ? "login" : "add";
-  if (state.page === "cards" && state.modal === targetModal) return;
+  const existing = importedCardMatch();
+  const targetModal = backend.isConfigured && !backend.user ? "login" : existing ? "edit" : "add";
+  if (state.page === "cards" && state.modal === targetModal && state.activeCardId === (existing?.id || null)) return;
   state.page = "cards";
   state.filter = "ALL";
-  state.activeCardId = null;
+  state.activeCardId = existing?.id || null;
   state.modal = targetModal;
   history.replaceState(null, "", "#cards");
   render();
   if (state.modal === "add") {
     requestAnimationFrame(() => document.querySelector("#card-quantity")?.select());
     toast("Yuyu-tei card details imported. Review the quantity, then add the card.");
+  } else if (state.modal === "edit") {
+    requestAnimationFrame(() => document.querySelector("#native-price")?.select());
+    toast("Existing card found. Review the latest Yuyu-tei price, then save the update.");
   }
 }
 
@@ -707,7 +729,17 @@ function renderRatesModal() {
 
 function renderCardForm(card = null) {
   const isEdit = Boolean(card);
-  const value = card || pendingCardImport || {
+  const importedUpdate = isEdit && pendingCardImport
+    && canonicalSourceUrl(card.sourceUrl) === canonicalSourceUrl(pendingCardImport.sourceUrl);
+  const value = importedUpdate
+    ? {
+        ...card,
+        ...pendingCardImport,
+        quantity: card.quantity,
+        owned: card.owned,
+        image: pendingCardImport.image || card.image,
+      }
+    : card || pendingCardImport || {
     sourceUrl: "",
     series: "ONE PIECE",
     code: "",
@@ -718,15 +750,17 @@ function renderCardForm(card = null) {
     image: "",
     owned: true,
   };
-  const importStatus = !isEdit && pendingCardImport
-    ? `Imported directly from Yuyu-tei.${pendingCardImport.availability === "OutOfStock" ? " This listing is currently out of stock." : ""}`
+  const importStatus = importedUpdate
+    ? `Existing card matched by its source URL. Stored price: ${nativeMoney(card.nativePrice, card.currency)} · Latest page price: ${nativeMoney(Number(value.nativePrice), value.currency)}.${pendingCardImport.availability === "OutOfStock" ? " This listing is currently out of stock." : ""}`
+    : !isEdit && pendingCardImport
+      ? `Imported directly from Yuyu-tei.${pendingCardImport.availability === "OutOfStock" ? " This listing is currently out of stock." : ""}`
     : "Fetches the card name, code, source price, and product image when available.";
   return modalShell(
     `<form class="modal-body" id="card-form" data-editing="${isEdit ? html(card.id) : ""}">
       ${!isEdit ? `<div class="import-helper"><div><strong>ONE-CLICK YUYU-TEI IMPORT</strong><small>Drag this button to your browser bookmarks bar once. On any Yuyu-tei card page, click the bookmark to open CardBoy with every available detail filled in.</small></div><a class="import-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this button to your bookmarks bar">DRAG TO BOOKMARKS</a></div>` : ""}
       <div class="form-grid">
         <div class="form-fields">
-          <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">FETCH</button></div><small id="fetch-status"${pendingCardImport && !isEdit ? ' class="import-success"' : ""}>${html(importStatus)}</small></div>
+          <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">FETCH</button></div><small id="fetch-status"${pendingCardImport && (!isEdit || importedUpdate) ? ' class="import-success"' : ""}>${html(importStatus)}</small></div>
           <div class="field"><label for="card-series">Card series</label><select id="card-series" name="series">${Object.keys(SERIES).map((series) => `<option ${series === value.series ? "selected" : ""}>${html(series)}</option>`).join("")}</select></div>
           <div class="two-fields"><div class="field"><label for="card-code">Card code</label><input id="card-code" name="code" value="${html(value.code)}" placeholder="OP08-106" required/></div><div class="field"><label for="card-title">Card name</label><input id="card-title" name="title" value="${html(value.title)}" placeholder="Nami" required/></div></div>
           <div class="two-fields"><div class="field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" step="1" value="${value.quantity}" required/></div><div class="field"><label for="card-currency">Currency</label><select id="card-currency" name="currency"><option ${value.currency === "JPY" ? "selected" : ""}>JPY</option><option ${value.currency === "USD" ? "selected" : ""}>USD</option></select></div></div>
@@ -737,7 +771,7 @@ function renderCardForm(card = null) {
       </div>
       <div class="modal-actions">${isEdit ? '<button type="button" class="danger-button" data-action="delete">DELETE CARD</button>' : ""}<button type="button" class="secondary-button" data-action="close">CANCEL</button><button type="submit" class="primary-button">${isEdit ? "SAVE CHANGES" : "ADD CARD"}</button></div>
     </form>`,
-    { title: isEdit ? "Edit card" : "New card entry" },
+    { title: importedUpdate ? "Update card price" : isEdit ? "Edit card" : "New card entry" },
   );
 }
 
@@ -1047,7 +1081,7 @@ function openModal(name) {
 }
 
 function closeModal() {
-  if (pendingCardImport && ["add", "login"].includes(state.modal)) clearPendingCardImport();
+  if (pendingCardImport && ["add", "edit", "login"].includes(state.modal)) clearPendingCardImport();
   state.modal = null;
   render();
 }
@@ -1073,6 +1107,9 @@ async function saveCard(event) {
   const form = event.currentTarget;
   const data = new FormData(form);
   const editingId = form.dataset.editing;
+  const existing = editingId ? state.cards.find((card) => card.id === editingId) : null;
+  const importedUpdate = Boolean(existing && pendingCardImport
+    && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(pendingCardImport.sourceUrl));
   const nativePrice = Number(data.get("nativePrice"));
   const cardId = editingId || `${String(data.get("code")).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
   let image = String(data.get("image") || "");
@@ -1096,15 +1133,22 @@ async function saveCard(event) {
     owned: data.get("owned") === "on",
     lastChecked: new Date().toISOString(),
   };
+  let priceMovement = null;
   if (editingId) {
     const index = state.cards.findIndex((card) => card.id === editingId);
-    const existing = state.cards[index];
+    const previous = state.cards[index];
+    const change = previous.nativePrice
+      ? Number((((nativePrice - previous.nativePrice) / previous.nativePrice) * 100).toFixed(1))
+      : 0;
     state.cards[index] = {
-      ...existing,
+      ...previous,
       ...payload,
-      history: nativePrice === existing.nativePrice ? existing.history : [...existing.history.slice(-11), nativePrice],
+      change: nativePrice === previous.nativePrice ? previous.change : change,
+      history: nativePrice === previous.nativePrice ? previous.history : [...previous.history.slice(-11), nativePrice],
     };
-    toast("Card details updated.");
+    if (importedUpdate && nativePrice !== previous.nativePrice) {
+      priceMovement = { previousPrice: previous.nativePrice, change };
+    }
   } else {
     const seed = nativePrice || 1;
     state.cards.unshift({
@@ -1113,14 +1157,34 @@ async function saveCard(event) {
       change: 0,
       history: Array.from({ length: 12 }, (_, index) => Number((seed * (0.82 + index * 0.016)).toFixed(2))),
     });
-    toast("Card added to your collection.");
   }
   state.cards.forEach((card, index) => {
     card.sortOrder = index;
   });
   const savedCard = editingId ? state.cards.find((card) => card.id === editingId) : state.cards.find((card) => card.id === cardId);
+  let alert = null;
+  if (priceMovement) {
+    const direction = priceMovement.change >= 0 ? "increased" : "decreased";
+    alert = {
+      id: `${savedCard.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      cardId: savedCard.id,
+      title: `${savedCard.title} ${direction} ${Math.abs(priceMovement.change).toFixed(1)}%`,
+      message: `Updated from ${nativeMoney(priceMovement.previousPrice, savedCard.currency)} to ${nativeMoney(savedCard.nativePrice, savedCard.currency)} (${money(unitPhp(savedCard))}) per card.`,
+      change: priceMovement.change,
+      createdAt: savedCard.lastChecked,
+      read: false,
+      automatic: false,
+    };
+    state.notifications.unshift(alert);
+    state.notifications = state.notifications.slice(0, 30);
+    state.lastPortfolioCheck = savedCard.lastChecked;
+  }
   try {
     await backend.saveCard(savedCard, unitPhp(savedCard));
+    if (alert) {
+      const savedAlert = await backend.saveNotification(alert);
+      if (savedAlert?.id) alert.id = savedAlert.id;
+    }
   } catch (error) {
     toast(`Cloud card save failed: ${error.message}`);
   }
@@ -1133,6 +1197,10 @@ async function saveCard(event) {
   history.replaceState(null, "", "#cards");
   saveState();
   render();
+  if (!editingId) toast("Card added to your collection.");
+  else if (priceMovement) toast(`Price ${priceMovement.change >= 0 ? "increase" : "decrease"} saved. A notification was created.`);
+  else if (importedUpdate) toast("Price checked. The Yuyu-tei price has not changed.");
+  else toast("Card details updated.");
 }
 
 async function fetchPreview() {
@@ -1289,7 +1357,7 @@ async function refreshPrices(automatic) {
 
 function philippineCheckWindow(now = new Date()) {
   const phNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  const todayCheck = new Date(Date.UTC(phNow.getUTCFullYear(), phNow.getUTCMonth(), phNow.getUTCDate(), DAILY_CHECK_HOUR - 8));
+  const todayCheck = new Date(Date.UTC(phNow.getUTCFullYear(), phNow.getUTCMonth(), phNow.getUTCDate(), DAILY_CHECK_HOUR - 8, DAILY_CHECK_MINUTE));
   return { todayCheck, nextCheck: new Date(todayCheck.getTime() + (now >= todayCheck ? 24 * 60 * 60 * 1000 : 0)) };
 }
 

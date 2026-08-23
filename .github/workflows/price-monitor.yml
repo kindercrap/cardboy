@@ -1,0 +1,39 @@
+name: Monitor Yuyu-tei prices
+
+on:
+  schedule:
+    # 01:15 UTC is 09:15 Philippine Time (PHT, UTC+8).
+    - cron: "15 1 * * *"
+  workflow_dispatch:
+    inputs:
+      probe_only:
+        description: Test whether this GitHub runner can read one public Yuyu-tei listing
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cardboy-yuyutei-price-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Probe Yuyu-tei access
+        if: ${{ inputs.probe_only == true }}
+        run: node scripts/monitor-prices.mjs --probe https://yuyu-tei.jp/sell/opc/card/op05/10155
+      - name: Check saved cards and create alerts
+        if: ${{ inputs.probe_only != true }}
+        env:
+          SUPABASE_URL: ${{ secrets.CARDBOY_SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.CARDBOY_SUPABASE_SECRET_KEY }}
+        run: node scripts/monitor-prices.mjs

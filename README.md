@@ -24,7 +24,7 @@ Open `http://127.0.0.1:4173`.
 - Manual photo upload with in-browser resizing
 - JPY and USD to PHP conversion with custom rates and reset-to-current behavior
 - In-app notifications for price movements
-- Manual live source checks and a browser-side daily check scheduled for 9:00 AM Philippine time
+- A free GitHub Actions Yuyu-tei monitor scheduled for 9:15 AM Philippine time
 - Responsive desktop/mobile layouts
 - Clearly labeled local Google sign-in preview state
 - Browser storage persistence
@@ -39,11 +39,12 @@ Yuyu-tei currently blocks CardBoy's Supabase server from reading its product pag
 2. Drag **Drag to Bookmarks** to the browser bookmarks bar once.
 3. Open a Yuyu-tei card page and click the saved bookmark.
 4. CardBoy opens in a new tab with the source URL, card code, name, currency, listed price, image, and availability already read from the page's Product JSON-LD.
-5. Review the quantity and click **Add Card**.
+5. If the source URL is new, review the quantity and click **Add Card**. If that URL is already saved, CardBoy opens the existing card with the latest page price ready to review.
+6. Saving a changed imported price adds a price-history point and a CardBoy notification. Saving an unchanged price records the check without creating a false alert.
 
-The importer only prefills the form and never saves a card without confirmation. It runs on the Yuyu-tei page at the user's request, so no F12/Console workflow or paid proxy is required. It does not replace unattended daily monitoring; that still requires a source which permits scheduled server requests.
+The importer only prefills the form and never saves a card without confirmation. It runs on the Yuyu-tei page at the user's request, so no F12/Console workflow or paid proxy is required.
 
-In local preview mode, the 9:00 AM PHT schedule runs while the local app server and browser page are open. In production, Supabase Cron invokes the Edge Function unattended at 01:00 UTC / 09:00 PHT. The published deployment uses real Google OAuth and stores each signed-in user's collection separately under Row Level Security.
+In local preview mode, the 9:15 AM PHT fallback schedule runs while the local app server and browser page are open. In production, `.github/workflows/price-monitor.yml` runs unattended at 01:15 UTC / 09:15 PHT. It reads each distinct saved Yuyu-tei URL once, updates matching cards, stores history only when a price moves, and creates in-app notifications. GitHub may start scheduled workflows a few minutes late during busy periods.
 
 ## Free production deployment
 
@@ -55,6 +56,8 @@ The production files are already included:
 - `supabase/functions/daily-price-check`: user-triggered or unattended batch checking, FX refresh, history, and notifications
 - `supabase/setup-cron.sql`: the daily 09:00 PHT schedule
 - `.github/workflows/pages.yml`: free GitHub Pages deployment
+- `.github/workflows/price-monitor.yml`: free 09:15 PHT Yuyu-tei monitoring from a GitHub-hosted runner
+- `scripts/monitor-prices.mjs`: rate-limited Yuyu-tei JSON-LD reader and Supabase updater
 - `backend.js`: automatic cloud/local adapter
 
 ### 1. Create and configure Supabase
@@ -91,6 +94,17 @@ Once `config.js` contains the Supabase public values, CardBoy replaces the demo 
 
 Push `main` to GitHub. The included workflow prepares only the static frontend files and deploys them to GitHub Pages. Supabase hosts the extraction and scheduled backend separately on its free tier.
 
+### 4. Enable the unattended Yuyu-tei monitor
+
+Create these encrypted repository secrets under **GitHub → cardboy → Settings → Secrets and variables → Actions**:
+
+- `CARDBOY_SUPABASE_URL`: the Supabase project URL
+- `CARDBOY_SUPABASE_SECRET_KEY`: a server-only `sb_secret_...` key from Supabase Settings → API Keys
+
+Never place the secret key in `config.js`, source code, a browser, or a workflow log. The monitor uses it only inside the GitHub Actions runner to read saved source URLs and write card prices, snapshots, FX rates, and notifications. The public browser app continues to use the low-privilege publishable key plus Row Level Security.
+
+After adding both secrets, open **Actions → Monitor Yuyu-tei prices → Run workflow** for the first full check. Scheduled checks then begin daily at 09:15 PHT. A manual `probe_only` run tests whether the runner can read one public Yuyu-tei listing without accessing CardBoy account data.
+
 ## Recommended production stack
 
 The selected low-maintenance stack is:
@@ -99,10 +113,10 @@ The selected low-maintenance stack is:
 - Authentication: Supabase Auth with Google OAuth
 - Database: Supabase Postgres with Row Level Security
 - Card images: Supabase Storage
-- Scheduled checks: Supabase Cron calling an Edge Function once daily
-- Source extraction: an Edge Function with one parser adapter per supported card store
+- Scheduled Yuyu-tei checks: GitHub Actions at 09:15 PHT, using encrypted repository secrets
+- Source extraction: a rate-limited JSON-LD reader for Yuyu-tei plus Edge Function adapters for other permitted sources
 - Exchange rates: a server-side daily call to a reliable FX provider, cached in the database
-- Backend hosting: Supabase Edge Functions and Cron; GitHub Pages only hosts the frontend and does not run `server.mjs`.
+- Backend hosting: Supabase Edge Functions/Database plus GitHub Actions; GitHub Pages only hosts the frontend and does not run `server.mjs`.
 
 Suggested tables:
 
@@ -120,7 +134,7 @@ Use server-side extraction for unattended monitoring wherever the source permits
 - Free Supabase project in Singapore with Postgres, Storage, Auth, and Row Level Security
 - Google OAuth published for external Google accounts
 - Authenticated `extract-card` and `daily-price-check` Edge Functions
-- Active Supabase Cron job at `0 1 * * *` (09:00 Asia/Manila)
+- GitHub Actions daily Yuyu-tei monitor included at `15 1 * * *` (09:15 Asia/Manila)
 - The repository contains only the browser-safe Supabase publishable key; server and OAuth secrets stay in their respective cloud dashboards
 
 ## GitHub

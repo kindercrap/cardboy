@@ -154,6 +154,22 @@ export const backend = {
     if (error) throw error;
   },
 
+  async saveNotification(notification) {
+    if (!client || !currentUser) return null;
+    const { data, error } = await client.from("notifications").insert({
+      user_id: currentUser.id,
+      card_id: notification.cardId,
+      title: notification.title,
+      message: notification.message,
+      change_percent: notification.change || 0,
+      automatic: notification.automatic !== false,
+      read: notification.read === true,
+      created_at: notification.createdAt || new Date().toISOString(),
+    }).select("id").single();
+    if (error) throw error;
+    return data;
+  },
+
   async extractCard(url) {
     if (!client || !currentUser) throw new Error("Sign in before fetching a card source.");
     const { data, error } = await client.functions.invoke("extract-card", { body: { url } });
