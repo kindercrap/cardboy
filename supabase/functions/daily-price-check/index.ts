@@ -12,13 +12,13 @@ import {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cardboy-cron-secret",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
 }
 
@@ -131,25 +131,68 @@ async function storeDailyObservation(service: any, card: any, listing: any, obse
   return { stored: Boolean(inserted.data?.length), previousPrice, priceChange, percentageChange };
 }
 
+async function updateMonitorStatus(service: any, fields: Record<string, unknown>) {
+  const { error } = await service.from("price_monitor_status").update({
+    ...fields,
+    updated_at: new Date().toISOString(),
+  }).eq("id", "daily");
+  if (error) throw error;
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
+  if (request.method === "GET") {
+    try {
+      const url = Deno.env.get("SUPABASE_URL");
+      const serviceKey = Deno.env.get("SUPABASE_SECRET_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      if (!url || !serviceKey) throw new Error("Supabase service credentials are not configured.");
+      const statusClient = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+      const { data, error } = await statusClient.from("price_monitor_status").select("*").eq("id", "daily").maybeSingle();
+      if (error) throw error;
+      return json({ status: data });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Monitor status is unavailable." }, 500);
+    }
   }
   if (request.method !== "POST") {
     return json({ error: "Method not allowed." }, 405);
   }
 
+  let service: any = null;
+  let checked = 0;
+  let movements = 0;
+  let observations = 0;
+  let unsupported = 0;
+  let processed = 0;
+  let totalSources = 0;
+
   try {
     const url = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SECRET_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!url || !serviceKey) throw new Error("Supabase service credentials are not configured.");
-    const service = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    service = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
     const automatic = isAutomaticRequest(request);
     const authenticatedUserClient = automatic ? null : await userClient(request);
     if (!automatic && !authenticatedUserClient) {
       return json({ error: "Sign in with Google before checking prices." }, 401);
     }
     const cardsClient = automatic ? service : authenticatedUserClient!;
+    const startedAt = new Date().toISOString();
+    await updateMonitorStatus(service, {
+      status: "running",
+      trigger: automatic ? "scheduled" : "manual",
+      started_at: startedAt,
+      completed_at: null,
+      processed_sources: 0,
+      total_sources: 0,
+      checked_sources: 0,
+      observations: 0,
+      movements: 0,
+      unsupported_sources: 0,
+      message: "Checking the latest Yuyutei selling prices via Card-Value.",
+    });
     await updateFxRates(service);
     const { data: cards, error } = await cardsClient.from("cards").select("*").not("source_url", "is", null).limit(500);
     if (error) throw error;
@@ -167,7 +210,13 @@ Deno.serve(async (request) => {
     }
     const maxSources = Number(Deno.env.get("MAX_SOURCES_PER_RUN") || 100);
     const selectedEntries = [...grouped.entries()].slice(0, maxSources);
+    totalSources = selectedEntries.length;
     const selectedCards = selectedEntries.flatMap((entry) => entry[1]);
+    await updateMonitorStatus(service, {
+      status: "running",
+      total_sources: totalSources,
+      message: totalSources ? `Checking source 1 of ${totalSources}.` : "No saved card sources to check.",
+    });
     const scraper = createCardValueScraper({
       concurrency: 2,
       minimumDelayMs: 700,
@@ -178,10 +227,6 @@ Deno.serve(async (request) => {
     const { data: fx } = await service.from("fx_rates").select("php_rate").eq("currency", "JPY").maybeSingle();
     const jpyPhpRate = Number(fx?.php_rate || 1);
 
-    let checked = 0;
-    let movements = 0;
-    let observations = 0;
-    let unsupported = 0;
     for (const [sourceKey, linkedCards] of selectedEntries) {
       const sourceUrl = linkedCards[0]?.source_url || sourceKey;
       const listing = listings.get(sourceKey);
@@ -198,6 +243,17 @@ Deno.serve(async (request) => {
             updated_at: new Date().toISOString(),
           }).eq("user_id", card.user_id).eq("id", card.id);
         }
+        processed += 1;
+        await updateMonitorStatus(service, {
+          status: "running",
+          processed_sources: processed,
+          total_sources: totalSources,
+          checked_sources: checked,
+          observations,
+          movements,
+          unsupported_sources: unsupported,
+          message: `Checked ${processed} of ${totalSources} sources.`,
+        });
         continue;
       }
 
@@ -242,9 +298,50 @@ Deno.serve(async (request) => {
           }),
         ]);
       }
+      processed += 1;
+      await updateMonitorStatus(service, {
+        status: "running",
+        processed_sources: processed,
+        total_sources: totalSources,
+        checked_sources: checked,
+        observations,
+        movements,
+        unsupported_sources: unsupported,
+        message: `Checked ${processed} of ${totalSources} sources.`,
+      });
     }
+    const completedAt = new Date().toISOString();
+    await updateMonitorStatus(service, {
+      status: "success",
+      completed_at: completedAt,
+      last_success_at: completedAt,
+      processed_sources: processed,
+      total_sources: totalSources,
+      checked_sources: checked,
+      observations,
+      movements,
+      unsupported_sources: unsupported,
+      message: `${checked} sources checked. ${movements} price movements found.`,
+    });
     return json({ checked, observations, movements, unsupported, automatic, sourceVia: "card-value.jp" });
   } catch (error) {
+    if (service) {
+      try {
+        await updateMonitorStatus(service, {
+          status: "error",
+          completed_at: new Date().toISOString(),
+          processed_sources: processed,
+          total_sources: totalSources,
+          checked_sources: checked,
+          observations,
+          movements,
+          unsupported_sources: unsupported,
+          message: error instanceof Error ? error.message.slice(0, 300) : "The price check failed.",
+        });
+      } catch {
+        // Preserve the original price-check error response.
+      }
+    }
     return json(
       { error: error instanceof Error ? error.message : "Price check failed." },
       500,

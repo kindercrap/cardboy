@@ -55,6 +55,14 @@ async function currentPhpRates() {
   return Object.fromEntries(stored.map((row) => [row.currency, Number(row.php_rate)]));
 }
 
+async function updateMonitorStatus(fields) {
+  return rest("price_monitor_status?id=eq.daily", {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: { ...fields, updated_at: new Date().toISOString() },
+  });
+}
+
 function philippineObservationDay(value = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Manila",
@@ -123,7 +131,7 @@ async function markUnsupported(sourceUrl, linkedCards, message) {
   console.warn(`[CARD-VALUE] ${sourceUrl}: ${message}`);
 }
 
-async function monitor() {
+async function performMonitor(onProgress = async () => {}) {
   const cards = await rest("cards?select=user_id,id,code,title,source_url,card_value_url,source_currency,source_price,image_url,change_percent&source_url=not.is.null&order=source_url.asc");
   const rates = await currentPhpRates();
   const grouped = new Map();
@@ -150,6 +158,8 @@ async function monitor() {
   let movements = 0;
   let failed = 0;
   let observations = 0;
+  let processed = 0;
+  await onProgress({ processed, total: grouped.size, checked, observations, movements, unsupported: failed });
   for (const [sourceKey, linkedCards] of grouped) {
     const sourceUrl = linkedCards[0]?.source_url || sourceKey;
     const listing = listings.get(sourceKey);
@@ -159,6 +169,8 @@ async function monitor() {
         ? "Card-Value does not currently list a Yuyutei selling price for this exact variant. Use the bookmark importer for updates."
         : "Automatic monitoring currently supports One Piece variants that Card-Value maps to a Yuyutei selling listing.";
       await markUnsupported(sourceUrl, linkedCards, message);
+      processed += 1;
+      await onProgress({ processed, total: grouped.size, checked, observations, movements, unsupported: failed });
       continue;
     }
 
@@ -217,11 +229,72 @@ async function monitor() {
         }),
       ]);
     }
+    processed += 1;
+    await onProgress({ processed, total: grouped.size, checked, observations, movements, unsupported: failed });
   }
 
-  console.log(`CardBoy monitor finished using Card-Value's Yuyutei selling table: ${checked} sources checked, ${observations} daily observations stored, ${movements} price movements, ${failed} unsupported sources.`);
   const eligible = cards.some((card) => isCardValueCardUrl(card.source_url) || isYuyuteiOnePieceSellingUrl(card.source_url));
   if (eligible && checked === 0) throw new Error("No eligible One Piece source could be checked through Card-Value.");
+  console.log(`CardBoy monitor finished using Card-Value's Yuyutei selling table: ${checked} sources checked, ${observations} daily observations stored, ${movements} price movements, ${failed} unsupported sources.`);
+  return { processed, total: grouped.size, checked, observations, movements, unsupported: failed };
+}
+
+async function monitor() {
+  const startedAt = new Date().toISOString();
+  await updateMonitorStatus({
+    status: "running",
+    trigger: "scheduled",
+    started_at: startedAt,
+    completed_at: null,
+    processed_sources: 0,
+    total_sources: 0,
+    checked_sources: 0,
+    observations: 0,
+    movements: 0,
+    unsupported_sources: 0,
+    message: "Checking the latest Yuyutei selling prices via Card-Value.",
+  });
+
+  try {
+    const result = await performMonitor(async (progress) => {
+      await updateMonitorStatus({
+        status: "running",
+        processed_sources: progress.processed,
+        total_sources: progress.total,
+        checked_sources: progress.checked,
+        observations: progress.observations,
+        movements: progress.movements,
+        unsupported_sources: progress.unsupported,
+        message: progress.total
+          ? `Checking source ${Math.min(progress.processed + 1, progress.total)} of ${progress.total}.`
+          : "Preparing saved card sources.",
+      });
+    });
+    const completedAt = new Date().toISOString();
+    await updateMonitorStatus({
+      status: "success",
+      completed_at: completedAt,
+      last_success_at: completedAt,
+      processed_sources: result.processed,
+      total_sources: result.total,
+      checked_sources: result.checked,
+      observations: result.observations,
+      movements: result.movements,
+      unsupported_sources: result.unsupported,
+      message: `${result.checked} sources checked. ${result.movements} price movements found.`,
+    });
+  } catch (error) {
+    try {
+      await updateMonitorStatus({
+        status: "error",
+        completed_at: new Date().toISOString(),
+        message: error instanceof Error ? error.message.slice(0, 300) : "The price check failed.",
+      });
+    } catch (statusError) {
+      console.warn(`[MONITOR STATUS] ${statusError instanceof Error ? statusError.message : "could not save the failed state"}`);
+    }
+    throw error;
+  }
 }
 
 const probeIndex = process.argv.indexOf("--probe");

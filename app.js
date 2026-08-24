@@ -1,4 +1,12 @@
 import { backend } from "./backend.js";
+import {
+  createInitialMonitorRun,
+  MONITOR_STATUS_ACTIVE_POLL_MS,
+  MONITOR_STATUS_IDLE_POLL_MS,
+  monitorRunSignature,
+  monitorStatusView,
+  normalizeMonitorRun,
+} from "./monitor-status.js";
 
 const STORAGE_KEY = "cardboy-demo-v1";
 const CARD_IMPORT_KEY = "cardboy-pending-import-v1";
@@ -77,6 +85,7 @@ const initialState = {
   liveRates: { JPY: 0.39, USD: 56.8 },
   ratesCustomized: false,
   lastPortfolioCheck: new Date().toISOString(),
+  monitorRun: createInitialMonitorRun(),
   notifications: [],
   cards: defaultCards,
 };
@@ -85,6 +94,8 @@ let state = loadState();
 let pendingCardImport = loadPendingCardImport();
 let pendingImageFile = null;
 let backendSyncInProgress = false;
+let monitorStatusSyncInProgress = false;
+let monitorStatusTimer = null;
 let nativeCardDrag = null;
 let pointerCardDrag = null;
 let suppressCardOpenUntil = 0;
@@ -124,7 +135,7 @@ function loadState() {
 }
 
 function saveState() {
-  const { modal, activeCardId, page, ...persisted } = state;
+  const { modal, activeCardId, page, monitorRun, ...persisted } = state;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
   } catch {
@@ -292,6 +303,31 @@ async function loadCloudPortfolio() {
   }
 }
 
+function scheduleMonitorStatusSync() {
+  if (monitorStatusTimer) clearTimeout(monitorStatusTimer);
+  if (!backend.isReady) return;
+  const delay = state.monitorRun?.status === "running" ? MONITOR_STATUS_ACTIVE_POLL_MS : MONITOR_STATUS_IDLE_POLL_MS;
+  monitorStatusTimer = setTimeout(refreshMonitorStatus, delay);
+}
+
+async function refreshMonitorStatus() {
+  if (!backend.isReady || monitorStatusSyncInProgress) return;
+  monitorStatusSyncInProgress = true;
+  try {
+    const remote = await backend.getMonitorStatus();
+    const next = normalizeMonitorRun(remote);
+    if (monitorRunSignature(next) !== monitorRunSignature(state.monitorRun)) {
+      state.monitorRun = next;
+      render();
+    }
+  } catch (error) {
+    console.warn(`Monitor status sync failed: ${error.message}`);
+  } finally {
+    monitorStatusSyncInProgress = false;
+    scheduleMonitorStatusSync();
+  }
+}
+
 async function applyBackendUser(user) {
   if (user) {
     state.user = {
@@ -323,6 +359,7 @@ async function initializeProductionBackend() {
     render();
     const user = await backend.initialize((nextUser) => applyBackendUser(nextUser));
     await applyBackendUser(user);
+    await refreshMonitorStatus();
   } catch (error) {
     toast(`Cloud setup could not start: ${error.message}`);
   }
@@ -436,6 +473,7 @@ function render() {
 function renderHeader() {
   const user = state.user;
   const unread = state.notifications.filter((item) => !item.read).length;
+  const monitor = monitorStatusView(state.monitorRun, { dailyCheckLabel: DAILY_CHECK_LABEL });
   return `
     <header class="topbar">
       <button class="brand-button" data-action="navigate" data-page="dashboard" aria-label="Go to dashboard">
@@ -461,7 +499,7 @@ function renderHeader() {
         </div>
       </div>
     </header>
-    <div class="rate-strip">
+    <div class="rate-strip ${monitor.running ? "monitor-running" : ""}">
       <div class="rate-summary">
         <span class="rate-dot"></span>
         <span>¥1 = ₱${state.rates.JPY.toFixed(2)}</span>
@@ -469,7 +507,7 @@ function renderHeader() {
         <span>$1 = ₱${state.rates.USD.toFixed(2)}</span>
         <button class="rate-edit" data-action="rates">${state.ratesCustomized ? "CUSTOM" : "EDIT RATES"}</button>
       </div>
-      <div class="sync-status"><span class="sync-dot"></span><span>YUYUTEI VIA CARD-VALUE · ${DAILY_CHECK_LABEL}</span></div>
+      <div class="sync-status ${monitor.className}" role="status" aria-live="polite" title="${html(monitor.title)}"><span class="sync-dot" aria-hidden="true"></span><span>${html(monitor.label)}</span></div>
     </div>
   `;
 }
@@ -1333,15 +1371,34 @@ let dailyCheckTimer = null;
 async function refreshPrices(automatic) {
   if (priceCheckInProgress) return;
   priceCheckInProgress = true;
+  const startedAt = new Date().toISOString();
+  const totalSources = new Set(state.cards.map((card) => safeUrl(card.sourceUrl)).filter((url) => url !== "#")).size;
+  state.monitorRun = {
+    ...createInitialMonitorRun(),
+    status: "running",
+    trigger: automatic ? "scheduled" : "manual",
+    startedAt,
+    totalSources,
+    message: "Checking the latest Yuyutei selling prices via Card-Value.",
+  };
+  render();
   if (!automatic) toast("Checking live card sources…");
   if (backend.isReady && backend.user) {
     try {
       const result = await backend.checkPrices();
       priceCheckInProgress = false;
       await loadCloudPortfolio();
+      await refreshMonitorStatus();
       if (!automatic) toast(result.movements ? `${result.movements} price movement${result.movements === 1 ? "" : "s"} found.` : "Price check complete. No movements found.");
     } catch (error) {
       priceCheckInProgress = false;
+      state.monitorRun = {
+        ...state.monitorRun,
+        status: "error",
+        completedAt: new Date().toISOString(),
+        message: error.message,
+      };
+      render();
       toast(`Price check failed: ${error.message}`);
     }
     return;
@@ -1390,6 +1447,17 @@ async function refreshPrices(automatic) {
   });
   state.notifications = state.notifications.slice(0, 30);
   state.lastPortfolioCheck = checkedAt;
+  state.monitorRun = {
+    ...state.monitorRun,
+    status: "success",
+    completedAt: checkedAt,
+    lastSuccessAt: checkedAt,
+    processedSources: totalSources,
+    totalSources,
+    checkedSources: totalSources,
+    movements: movements.length,
+    message: `${totalSources} sources checked. ${movements.length} price movements found.`,
+  };
   priceCheckInProgress = false;
   saveState();
   render();

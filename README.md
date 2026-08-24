@@ -25,6 +25,7 @@ Open `http://127.0.0.1:4173`.
 - JPY and USD to PHP conversion with custom rates and reset-to-current behavior
 - In-app notifications for price movements
 - A free GitHub Actions monitor that reads only Yuyutei selling prices through Card-Value at 9:15 AM Philippine time
+- A live header indicator that shows when the monitor is checking prices, its source progress, and the recent completion result
 - Responsive desktop/mobile layouts
 - Clearly labeled local Google sign-in preview state
 - Browser storage persistence
@@ -64,6 +65,7 @@ The production files are already included:
 - `supabase/migrations/20260823000000_cardboy.sql`: tables, indexes, Row Level Security, and the image bucket
 - `supabase/migrations/20260823123000_owned_cards_and_sort_order.sql`: owned-card portfolio filtering and persistent custom ordering
 - `supabase/migrations/20260823224500_card_value_daily_observations.sql`: Card-Value variant mappings and deduplicated daily Yuyutei selling-price observations
+- `supabase/migrations/20260824091500_price_monitor_status.sql`: service-managed live monitor status and progress
 - `supabase/functions/extract-card`: authenticated on-demand source extraction
 - `supabase/functions/daily-price-check`: user-triggered or unattended batch checking, FX refresh, history, and notifications
 - `supabase/setup-cron.sql`: the daily 09:00 PHT schedule
@@ -137,6 +139,7 @@ Suggested tables:
 - `cards`: `id`, `user_id`, `series`, `code`, `title`, `quantity`, `source_url`, `source_currency`, `image_path`, timestamps
 - `price_snapshots`: `id`, `card_id`, `source_price`, `php_price`, `fx_rate`, `checked_at`, `status`
 - `daily_price_observations`: `card_id`, `card_number`, `variant`, `price`, `currency`, `source`, `source_via`, `price_change`, `percentage_change`, `observed_at`, `observation_day`
+- `price_monitor_status`: current run state, progress counters, completion time, and last successful check
 - `user_rates`: `user_id`, `currency`, `custom_rate`, `use_live_rate`, `updated_at`
 - `fx_rates`: `currency`, `php_rate`, `fetched_at`
 
