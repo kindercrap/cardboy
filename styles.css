@@ -872,6 +872,11 @@ h1 {
   transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, box-shadow 220ms ease;
 }
 
+.card-tile.is-pinned {
+  border-color: rgba(200, 255, 52, 0.42);
+  box-shadow: inset 0 2px 0 rgba(200, 255, 52, 0.45);
+}
+
 .card-tile.is-dragging {
   z-index: 4;
   border-color: rgba(200, 255, 52, 0.72);
@@ -933,6 +938,49 @@ h1 {
   height: 3px;
   border-radius: 50%;
   background: #eef1f4;
+}
+
+.pin-button {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  left: 48px;
+  width: 30px;
+  height: 30px;
+  padding: 7px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 9px;
+  color: #eef1f4;
+  cursor: pointer;
+  background: rgba(10, 11, 13, 0.78);
+  backdrop-filter: blur(6px);
+  transition: transform 160ms ease, border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.pin-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.pin-button:hover,
+.pin-button:focus-visible {
+  border-color: rgba(200, 255, 52, 0.58);
+  color: var(--lime);
+  outline: none;
+  transform: scale(1.06);
+  background: rgba(10, 11, 13, 0.94);
+}
+
+.pin-button.active {
+  border-color: rgba(200, 255, 52, 0.7);
+  color: var(--lime);
+  background: rgba(31, 42, 7, 0.92);
+}
+
+.pin-button.active svg {
+  fill: currentColor;
 }
 
 .card-tile:nth-child(2) { animation-delay: 35ms; }

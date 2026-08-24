@@ -62,7 +62,7 @@ export const backend = {
   async loadPortfolio() {
     if (!client || !currentUser) return null;
     const [cardsResult, snapshotsResult, dailyObservationsResult, ratesResult, fxResult, notificationsResult] = await Promise.all([
-      client.from("cards").select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true }),
+      client.from("cards").select("*").order("is_pinned", { ascending: false }).order("sort_order", { ascending: true }).order("created_at", { ascending: true }),
       client.from("price_snapshots").select("card_id,source_price,checked_at").order("checked_at", { ascending: true }),
       client.from("daily_price_observations").select("card_id,price,observed_at").order("observed_at", { ascending: true }),
       client.from("user_rates").select("*").maybeSingle(),
@@ -113,6 +113,7 @@ export const backend = {
       source_price: card.nativePrice,
       image_url: card.image,
       is_owned: card.owned !== false,
+      is_pinned: card.pinned === true,
       sort_order: Number.isFinite(Number(card.sortOrder)) ? Number(card.sortOrder) : 0,
       change_percent: card.change || 0,
       last_checked: card.lastChecked,
@@ -150,6 +151,16 @@ export const backend = {
       .eq("id", card.id)));
     const failed = results.find((result) => result.error);
     if (failed?.error) throw failed.error;
+  },
+
+  async setCardPinned(id, pinned) {
+    if (!client || !currentUser) return;
+    const { error } = await client
+      .from("cards")
+      .update({ is_pinned: pinned === true, updated_at: new Date().toISOString() })
+      .eq("user_id", currentUser.id)
+      .eq("id", id);
+    if (error) throw error;
   },
 
   async saveRates(rates, customized) {

@@ -1,4 +1,5 @@
 import { backend } from "./backend.js";
+import { normalizeCardOrder, toggleCardPinned } from "./card-order.js";
 import {
   createInitialMonitorRun,
   MONITOR_STATUS_ACTIVE_POLL_MS,
@@ -10,7 +11,7 @@ import {
 
 const STORAGE_KEY = "cardboy-demo-v1";
 const CARD_IMPORT_KEY = "cardboy-pending-import-v1";
-const APP_SCHEMA_VERSION = 4;
+const APP_SCHEMA_VERSION = 5;
 const DAILY_CHECK_HOUR = 9;
 const DAILY_CHECK_MINUTE = 15;
 const DAILY_CHECK_LABEL = "9:15 AM PHT";
@@ -35,6 +36,7 @@ const defaultCards = [
     nativePrice: 39800,
     image: "https://card.yuyu-tei.jp/opc/front/op09/10155.jpg",
     owned: true,
+    pinned: false,
     sortOrder: 0,
     change: 2.3,
     lastChecked: new Date().toISOString(),
@@ -51,6 +53,7 @@ const defaultCards = [
     nativePrice: 2850,
     image: "",
     owned: true,
+    pinned: false,
     sortOrder: 1,
     change: 4.2,
     lastChecked: new Date().toISOString(),
@@ -67,6 +70,7 @@ const defaultCards = [
     nativePrice: 4680,
     image: "",
     owned: true,
+    pinned: false,
     sortOrder: 2,
     change: 6.4,
     lastChecked: new Date().toISOString(),
@@ -114,11 +118,11 @@ function loadState() {
         ? { ...card, nativePrice: 39800, image: "https://card.yuyu-tei.jp/opc/front/op09/10155.jpg", change: 2.3, history: [31800, 32400, 33100, 32900, 34200, 35100, 36300, 35800, 37100, 38200, 38900, 39800] }
         : card);
     }
-    migratedCards = migratedCards.map((card, index) => ({
+    migratedCards = normalizeCardOrder(migratedCards.map((card) => ({
       ...card,
       owned: card.owned !== false,
-      sortOrder: index,
-    }));
+      pinned: card.pinned === true,
+    })));
     return {
       ...structuredClone(initialState),
       ...saved,
@@ -251,7 +255,7 @@ async function loadCloudPortfolio() {
       list.push(Number(snapshot.source_price));
       snapshots.set(snapshot.card_id, list);
     });
-    state.cards = remote.cards.map((card, index) => ({
+    state.cards = normalizeCardOrder(remote.cards.map((card, index) => ({
       id: card.id,
       series: card.series,
       code: card.code,
@@ -263,6 +267,7 @@ async function loadCloudPortfolio() {
       nativePrice: Number(card.source_price),
       image: card.image_url || "",
       owned: card.is_owned !== false,
+      pinned: card.is_pinned === true,
       sortOrder: Number.isFinite(Number(card.sort_order)) ? Number(card.sort_order) : index,
       change: Number(card.change_percent || 0),
       lastChecked: card.last_checked || card.updated_at,
@@ -270,7 +275,7 @@ async function loadCloudPortfolio() {
       monitorMessage: card.monitor_message || "Waiting for the next scheduled Card-Value check.",
       monitorCheckedAt: card.monitor_checked_at || null,
       history: padHistory(snapshots.get(card.id) || [], card.source_price),
-    }));
+    })));
     const live = Object.fromEntries(remote.fxRates.map((rate) => [rate.currency, Number(rate.php_rate)]));
     state.liveRates = { ...state.liveRates, ...live };
     if (remote.rates) {
@@ -454,6 +459,7 @@ function icon(name) {
     image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></svg>',
     refresh: '<svg class="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M6.1 9A7 7 0 0 1 18 6l2 1M4 17l2 1a7 7 0 0 0 11.9-3"/></svg>',
     bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 3h6v4l3 4v2H6v-2l3-4V3Z"/><path d="M12 13v8M5 21h14"/></svg>',
   };
   return icons[name] || "";
 }
@@ -683,10 +689,11 @@ function renderCards() {
   const portfolioCards = ownedCards();
   const ownedUnits = portfolioCards.reduce((sum, card) => sum + card.quantity, 0);
   const monitoredCards = state.cards.filter((card) => card.monitorStatus === "active").length;
+  const pinnedCards = state.cards.filter((card) => card.pinned === true).length;
   return `
     <section class="page">
       <div class="page-head">
-        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} tracked · ${portfolioCards.length} owned · ${ownedUnits} owned units · ${monitoredCards} price monitored</p></div>
+        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} tracked · ${pinnedCards} pinned · ${portfolioCards.length} owned · ${ownedUnits} owned units · ${monitoredCards} price monitored</p></div>
       </div>
       <div class="toolbar">
         <div class="filters" aria-label="Filter by card series">
@@ -709,7 +716,7 @@ function renderCardTile(card) {
   const series = SERIES[card.series] || { color: "#c8ff34" };
   const monitor = monitoringInfo(card);
   return `
-    <article class="card-tile" data-id="${html(card.id)}" draggable="true">
+    <article class="card-tile ${card.pinned ? "is-pinned" : ""}" data-id="${html(card.id)}" data-pinned="${card.pinned ? "true" : "false"}" draggable="true">
       <button class="card-open" data-action="details" data-id="${html(card.id)}" aria-label="View ${html(card.title)} card details">
         <div class="card-art">${renderArt(card)}<span class="quantity-pill">× ${card.quantity}</span><span class="ownership-pill ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ OWNED" : "WATCHING"}</span><span class="monitoring-pill ${monitor.className}" title="${html(monitor.detail)}">${monitor.label}</span></div>
         <div class="card-body">
@@ -718,6 +725,7 @@ function renderCardTile(card) {
         </div>
       </button>
       <button class="drag-handle" type="button" data-drag-handle aria-label="Drag ${html(card.title)} to reorder, or use arrow keys" title="Drag to reorder"><span></span><span></span><span></span><span></span><span></span><span></span></button>
+      <button class="pin-button ${card.pinned ? "active" : ""}" type="button" data-action="pin" data-id="${html(card.id)}" aria-label="${card.pinned ? "Unpin" : "Pin"} ${html(card.title)}" aria-pressed="${card.pinned ? "true" : "false"}" title="${card.pinned ? "Unpin card" : "Pin card to top"}">${icon("pin")}</button>
     </article>
   `;
 }
@@ -901,6 +909,7 @@ function bindEvents() {
 
 function reorderDraggedTile(draggedTile, targetTile, clientX, clientY) {
   if (!draggedTile || !targetTile || draggedTile === targetTile) return false;
+  if (draggedTile.dataset.pinned !== targetTile.dataset.pinned) return false;
   const targetRect = targetTile.getBoundingClientRect();
   const draggedRect = draggedTile.getBoundingClientRect();
   const sameRow = Math.abs(targetRect.top - draggedRect.top) < Math.min(targetRect.height, draggedRect.height) / 2;
@@ -919,14 +928,31 @@ function commitCardOrder(grid) {
   const reordered = state.cards.map((card) => (visibleSet.has(card.id) ? cardsById.get(visibleIds[visibleIndex++]) : card));
   const changed = reordered.some((card, index) => card.id !== state.cards[index]?.id);
   if (!changed) return;
-  state.cards = reordered;
-  state.cards.forEach((card, index) => {
-    card.sortOrder = index;
-  });
+  state.cards = normalizeCardOrder(reordered);
   saveState();
   render();
   backend.reorderCards(state.cards).catch((error) => toast(`Card order sync failed: ${error.message}`));
   toast("Card order saved.");
+}
+
+async function togglePinned(cardId) {
+  if (backend.isConfigured && !state.user) {
+    openModal("login");
+    toast("Sign in with Google to save pinned cards across devices.");
+    return;
+  }
+  const result = toggleCardPinned(state.cards, cardId);
+  if (!result.card) return;
+  state.cards = result.cards;
+  saveState();
+  render();
+  toast(result.card.pinned ? "Card pinned to the top." : "Card moved back to the regular list.");
+  try {
+    await backend.setCardPinned(result.card.id, result.card.pinned);
+    await backend.reorderCards(state.cards);
+  } catch (error) {
+    toast(`Pinned card sync failed: ${error.message}`);
+  }
 }
 
 function startNativeCardDrag(event) {
@@ -1000,6 +1026,7 @@ function reorderCardWithKeyboard(event) {
   const tile = event.currentTarget.closest(".card-tile");
   const sibling = ["ArrowLeft", "ArrowUp"].includes(event.key) ? tile.previousElementSibling : tile.nextElementSibling;
   if (!sibling?.classList.contains("card-tile")) return;
+  if (sibling.dataset.pinned !== tile.dataset.pinned) return;
   if (["ArrowLeft", "ArrowUp"].includes(event.key)) sibling.before(tile);
   else sibling.after(tile);
   const cardId = tile.dataset.id;
@@ -1113,6 +1140,8 @@ async function handleAction(event) {
   } else if (action === "details") {
     state.activeCardId = target.dataset.id;
     openModal("details");
+  } else if (action === "pin") {
+    await togglePinned(target.dataset.id);
   } else if (action === "edit") {
     pendingImageFile = null;
     state.activeCardId = target.dataset.id;
@@ -1233,13 +1262,12 @@ async function saveCard(event) {
     state.cards.push({
       ...payload,
       id: cardId,
+      pinned: false,
       change: 0,
       history: Array.from({ length: 12 }, (_, index) => Number((seed * (0.82 + index * 0.016)).toFixed(2))),
     });
   }
-  state.cards.forEach((card, index) => {
-    card.sortOrder = index;
-  });
+  state.cards = normalizeCardOrder(state.cards);
   const savedCard = editingId ? state.cards.find((card) => card.id === editingId) : state.cards.find((card) => card.id === cardId);
   let alert = null;
   if (priceMovement) {

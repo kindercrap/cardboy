@@ -18,6 +18,7 @@ Open `http://127.0.0.1:4173`.
 - Portfolio history and series-allocation graphs
 - Filterable card gallery with unique series colors
 - Drag-to-reorder collection cards with cloud-synced custom ordering
+- Pin priority cards to a persistent top group while keeping each group reorderable
 - “Card I own” tags, with dashboard values and graphs limited to owned cards
 - Card details, price history, source URL, and edit/delete flows
 - Server-side URL extraction for card details, source price, and product image when exposed by the source page
@@ -66,6 +67,7 @@ The production files are already included:
 - `supabase/migrations/20260823123000_owned_cards_and_sort_order.sql`: owned-card portfolio filtering and persistent custom ordering
 - `supabase/migrations/20260823224500_card_value_daily_observations.sql`: Card-Value variant mappings and deduplicated daily Yuyutei selling-price observations
 - `supabase/migrations/20260824091500_price_monitor_status.sql`: service-managed live monitor status and progress
+- `supabase/migrations/20260824100000_pinned_cards.sql`: persistent per-user pinned-card priority
 - `supabase/functions/extract-card`: authenticated on-demand source extraction
 - `supabase/functions/daily-price-check`: user-triggered or unattended batch checking, FX refresh, history, and notifications
 - `supabase/functions/monitor-status`: authenticated read-only status payload backed by the private monitor status row
