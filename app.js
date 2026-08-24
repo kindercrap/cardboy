@@ -1230,7 +1230,7 @@ async function saveCard(event) {
     }
   } else {
     const seed = nativePrice || 1;
-    state.cards.unshift({
+    state.cards.push({
       ...payload,
       id: cardId,
       change: 0,
