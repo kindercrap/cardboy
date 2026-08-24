@@ -90,15 +90,10 @@ export const backend = {
   },
 
   async getMonitorStatus() {
-    if (!client || !config.supabaseUrl || !config.supabasePublishableKey) return null;
-    const response = await fetch(`${config.supabaseUrl.replace(/\/$/, "")}/functions/v1/daily-price-check`, {
-      method: "GET",
-      headers: { apikey: config.supabasePublishableKey },
-      cache: "no-store",
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Monitor status is unavailable.");
-    return payload.status || null;
+    if (!client || !currentUser) return null;
+    const { data, error } = await client.functions.invoke("monitor-status", { body: {} });
+    if (error) throw await functionError(error, "Monitor status is unavailable.");
+    return data?.status || null;
   },
 
   async saveCard(card, phpPrice) {

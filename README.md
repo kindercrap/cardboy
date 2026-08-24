@@ -68,6 +68,7 @@ The production files are already included:
 - `supabase/migrations/20260824091500_price_monitor_status.sql`: service-managed live monitor status and progress
 - `supabase/functions/extract-card`: authenticated on-demand source extraction
 - `supabase/functions/daily-price-check`: user-triggered or unattended batch checking, FX refresh, history, and notifications
+- `supabase/functions/monitor-status`: authenticated read-only status payload backed by the private monitor status row
 - `supabase/setup-cron.sql`: the daily 09:00 PHT schedule
 - `.github/workflows/pages.yml`: free GitHub Pages deployment
 - `.github/workflows/price-monitor.yml`: free 09:15 PHT Yuyu-tei monitoring from a GitHub-hosted runner
