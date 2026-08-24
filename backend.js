@@ -91,7 +91,9 @@ export const backend = {
 
   async getMonitorStatus() {
     if (!client || !currentUser) return null;
-    const { data, error } = await client.functions.invoke("monitor-status", { body: {} });
+    const { data, error } = await client.functions.invoke("extract-card", {
+      body: { statusOnly: true },
+    });
     if (error) throw await functionError(error, "Monitor status is unavailable.");
     return data?.status || null;
   },

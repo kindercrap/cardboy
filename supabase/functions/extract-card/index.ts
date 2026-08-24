@@ -29,6 +29,22 @@ async function requireUser(request: Request) {
   return error ? null : data.user;
 }
 
+async function getMonitorStatus() {
+  const url = Deno.env.get("SUPABASE_URL");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !serviceKey) throw new Error("Supabase service access is not configured.");
+  const service = createClient(url, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await service
+    .from("price_monitor_status")
+    .select("*")
+    .eq("id", "daily")
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -41,7 +57,10 @@ Deno.serve(async (request: Request) => {
     if (!await requireUser(request)) {
       return json({ error: "Sign in with Google before fetching a card source." }, 401);
     }
-    const { url } = await request.json();
+    const { url, statusOnly } = await request.json();
+    if (statusOnly === true) {
+      return json({ status: await getMonitorStatus() });
+    }
     if (!url) {
       return json({ error: "A card page URL is required." }, 400);
     }
