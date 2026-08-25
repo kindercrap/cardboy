@@ -4,6 +4,7 @@ import {
   createInitialMonitorRun,
   MONITOR_STATUS_ACTIVE_POLL_MS,
   MONITOR_STATUS_IDLE_POLL_MS,
+  MONITOR_RECENT_RESULT_MS,
   monitorRunSignature,
   monitorStatusView,
   normalizeMonitorRun,
@@ -100,6 +101,7 @@ let pendingImageFile = null;
 let backendSyncInProgress = false;
 let monitorStatusSyncInProgress = false;
 let monitorStatusTimer = null;
+let manualMonitorOverrideUntil = 0;
 let nativeCardDrag = null;
 let pointerCardDrag = null;
 let suppressCardOpenUntil = 0;
@@ -317,6 +319,10 @@ function scheduleMonitorStatusSync() {
 
 async function refreshMonitorStatus() {
   if (!backend.isReady || monitorStatusSyncInProgress) return;
+  if (Date.now() < manualMonitorOverrideUntil) {
+    scheduleMonitorStatusSync();
+    return;
+  }
   monitorStatusSyncInProgress = true;
   try {
     const remote = await backend.getMonitorStatus();
@@ -1416,8 +1422,31 @@ async function refreshPrices(automatic) {
       const result = await backend.checkPrices();
       priceCheckInProgress = false;
       await loadCloudPortfolio();
-      await refreshMonitorStatus();
-      if (!automatic) toast(result.movements ? `${result.movements} price movement${result.movements === 1 ? "" : "s"} found.` : "Price check complete. No movements found.");
+      if (result.fallback) {
+        const completedAt = new Date().toISOString();
+        manualMonitorOverrideUntil = Date.now() + MONITOR_RECENT_RESULT_MS;
+        state.monitorRun = {
+          ...state.monitorRun,
+          status: "success",
+          completedAt,
+          lastSuccessAt: completedAt,
+          processedSources: result.checked + result.unsupported,
+          totalSources: result.checked + result.unsupported,
+          checkedSources: result.checked,
+          observations: result.observations || 0,
+          movements: result.movements,
+          unsupportedSources: result.unsupported,
+          message: `${result.checked} live sources checked through the recovery path. ${result.movements} price movements found.`,
+        };
+        render();
+      } else {
+        await refreshMonitorStatus();
+      }
+      if (!automatic) {
+        if (result.movements) toast(`${result.movements} price movement${result.movements === 1 ? "" : "s"} found.`);
+        else if (result.fallback && result.unsupported) toast(`Price check complete. ${result.checked} checked; ${result.unsupported} need a Card-Value variant URL.`);
+        else toast("Price check complete. No movements found.");
+      }
     } catch (error) {
       priceCheckInProgress = false;
       state.monitorRun = {
