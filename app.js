@@ -2,6 +2,7 @@ import { backend } from "./backend.js";
 import { normalizeCardOrder, toggleCardPinned } from "./card-order.js";
 import {
   createManualUpdateQueue,
+  manualUpdateBatch,
   manualUpdateCandidates,
   manualUpdateQueueView,
   markManualUpdateComplete,
@@ -105,6 +106,7 @@ const initialState = {
 };
 
 let state = loadState();
+let pendingImportAutoSave = new URL(location.href).searchParams.get("autoSave") === "1";
 let pendingCardImport = loadPendingCardImport();
 let manualUpdateQueue = loadManualUpdateQueue();
 let pendingImageFile = null;
@@ -115,6 +117,8 @@ let manualMonitorOverrideUntil = 0;
 let nativeCardDrag = null;
 let pointerCardDrag = null;
 let suppressCardOpenUntil = 0;
+let autoImportStarted = false;
+let autoImportCompletionResolve = null;
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 
@@ -193,6 +197,7 @@ function loadPendingCardImport() {
   else sessionStorage.removeItem(CARD_IMPORT_KEY);
   if (incoming !== null) {
     currentUrl.searchParams.delete("cardImport");
+    currentUrl.searchParams.delete("autoSave");
     history.replaceState(null, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash || "#cards"}`);
   }
   return normalized;
@@ -200,6 +205,7 @@ function loadPendingCardImport() {
 
 function clearPendingCardImport() {
   pendingCardImport = null;
+  pendingImportAutoSave = false;
   sessionStorage.removeItem(CARD_IMPORT_KEY);
 }
 
@@ -221,6 +227,32 @@ function resetManualUpdateQueue() {
   manualUpdateQueue = createManualUpdateQueue(state.cards);
   saveManualUpdateQueue();
   return manualUpdateQueueView(manualUpdateQueue, state.cards);
+}
+
+function openQuickUpdateTab(card) {
+  try {
+    const url = new URL(card.sourceUrl);
+    url.hash = "cardboy-quick";
+    return window.open(url.href, "_blank");
+  } catch {
+    return null;
+  }
+}
+
+function openQuickUpdateBatch() {
+  const cards = manualUpdateBatch(manualUpdateQueue, state.cards, 10);
+  let opened = 0;
+  cards.forEach((card) => {
+    if (openQuickUpdateTab(card)) opened += 1;
+  });
+  if (cards[0]) {
+    manualUpdateQueue = markManualUpdateOpened(manualUpdateQueue, cards[0].id, state.cards);
+    saveManualUpdateQueue();
+  }
+  render();
+  if (!opened) toast("Your browser blocked the tabs. Allow pop-ups for CardBoy, then try again.");
+  else if (opened < cards.length) toast(`Opened ${opened} of ${cards.length} tabs. Allow pop-ups to open the rest.`);
+  else toast(`${opened} Yuyu-tei tabs opened. Click your CardBoy bookmark once in each tab.`);
 }
 
 function canonicalSourceUrl(value) {
@@ -252,18 +284,84 @@ function importedCardMatch() {
   return state.cards.find((card) => canonicalSourceUrl(card.sourceUrl) === importedSource) || null;
 }
 
+function refreshPortfolioFromStorage() {
+  const saved = loadState();
+  state.cards = saved.cards;
+  state.notifications = saved.notifications;
+  state.lastPortfolioCheck = saved.lastPortfolioCheck;
+  manualUpdateQueue = loadManualUpdateQueue();
+}
+
+function startAutomaticCardImport() {
+  if (autoImportStarted) return;
+  autoImportStarted = true;
+  const submitWhenReady = () => new Promise((resolve) => {
+    autoImportCompletionResolve = resolve;
+    setTimeout(() => {
+      refreshPortfolioFromStorage();
+      const existing = importedCardMatch();
+      if (!existing) {
+        pendingImportAutoSave = false;
+        autoImportStarted = false;
+        autoImportCompletionResolve = null;
+        state.activeCardId = null;
+        state.modal = "add";
+        render();
+        resolve();
+        toast("This source is not in your collection yet. Review it before adding the new card.");
+        return;
+      }
+      state.activeCardId = existing.id;
+      state.modal = "edit";
+      render();
+      const form = document.querySelector("#card-form");
+      const importedPrice = Number(pendingCardImport?.nativePrice);
+      if (!form || !form.checkValidity() || !Number.isFinite(importedPrice) || importedPrice <= 0) {
+        pendingImportAutoSave = false;
+        autoImportStarted = false;
+        autoImportCompletionResolve = null;
+        resolve();
+        toast("Automatic save needs a quick review. No valid positive selling price was found.");
+        form?.reportValidity();
+        return;
+      }
+      const submit = form.querySelector('button[type="submit"]');
+      if (submit) {
+        submit.disabled = true;
+        submit.textContent = "SAVING…";
+      }
+      toast("Latest Yuyu-tei price found. Saving automatically…");
+      form.requestSubmit();
+    }, 0);
+  });
+  const task = navigator.locks?.request
+    ? navigator.locks.request("cardboy-quick-price-import", submitWhenReady)
+    : submitWhenReady();
+  task.catch((error) => {
+    autoImportStarted = false;
+    autoImportCompletionResolve = null;
+    pendingImportAutoSave = false;
+    toast(`Automatic update paused: ${error.message}`);
+  });
+}
+
 function activatePendingCardImport() {
   if (!pendingCardImport) return;
   const existing = importedCardMatch();
   const targetModal = backend.isConfigured && !backend.user ? "login" : existing ? "edit" : "add";
-  if (state.page === "cards" && state.modal === targetModal && state.activeCardId === (existing?.id || null)) return;
+  if (state.page === "cards" && state.modal === targetModal && state.activeCardId === (existing?.id || null)) {
+    if (pendingImportAutoSave && existing && targetModal === "edit") startAutomaticCardImport();
+    return;
+  }
   state.page = "cards";
   state.filter = "ALL";
   state.activeCardId = existing?.id || null;
   state.modal = targetModal;
   history.replaceState(null, "", "#cards");
   render();
-  if (state.modal === "add") {
+  if (pendingImportAutoSave && existing && state.modal === "edit") {
+    startAutomaticCardImport();
+  } else if (state.modal === "add") {
     requestAnimationFrame(() => document.querySelector("#card-quantity")?.select());
     toast("Yuyu-tei card details imported. Review the quantity, then add the card.");
   } else if (state.modal === "edit") {
@@ -274,7 +372,7 @@ function activatePendingCardImport() {
 
 function yuyuImporterBookmarklet() {
   const appUrl = `${location.origin}${location.pathname}`;
-  return `javascript:(()=>{try{const a=[...document.querySelectorAll('script[type="application/ld+json"]')].flatMap(s=>{try{const j=JSON.parse(s.textContent);return Array.isArray(j)?j:[j]}catch{return[]}}).flatMap(j=>j['@graph']||[j]),p=a.find(x=>x&&x['@type']==='Product');if(!p)throw Error('Product data was not found on this page.');const o=Array.isArray(p.offers)?p.offers[0]:p.offers,d={sourceUrl:location.href,series:location.pathname.includes('/opc/')?'ONE PIECE':'ONE PIECE',code:p.description||'',title:p.name||'',quantity:1,currency:o?.priceCurrency||'JPY',nativePrice:Number(o?.price||0),image:Array.isArray(p.image)?p.image[0]:p.image||'',availability:String(o?.availability||'').split('/').pop()},u=${JSON.stringify(appUrl)}+'?cardImport='+encodeURIComponent(JSON.stringify(d))+'#cards',w=open(u,'_blank');if(w)w.opener=null;else location.href=u}catch(e){alert('CardBoy importer: '+e.message)}})()`;
+  return `javascript:(()=>{try{const a=[...document.querySelectorAll('script[type="application/ld+json"]')].flatMap(s=>{try{const j=JSON.parse(s.textContent);return Array.isArray(j)?j:[j]}catch{return[]}}).flatMap(j=>j['@graph']||[j]),p=a.find(x=>x&&x['@type']==='Product');if(!p)throw Error('Product data was not found on this page.');const o=Array.isArray(p.offers)?p.offers[0]:p.offers,s=new URL(location.href),q=s.hash==='#cardboy-quick'&&window.opener&&!window.opener.closed;s.hash='';const d={sourceUrl:s.href,series:s.pathname.includes('/opc/')?'ONE PIECE':'ONE PIECE',code:p.description||'',title:p.name||'',quantity:1,currency:o?.priceCurrency||'JPY',nativePrice:Number(o?.price||0),image:Array.isArray(p.image)?p.image[0]:p.image||'',availability:String(o?.availability||'').split('/').pop()},u=${JSON.stringify(appUrl)}+'?cardImport='+encodeURIComponent(JSON.stringify(d));if(q)location.replace(u+'&autoSave=1#cards');else{const w=open(u+'#cards','_blank');if(w)w.opener=null;else location.href=u+'#cards'}}catch(e){alert('CardBoy importer: '+e.message)}})()`;
 }
 
 function initialsFor(user) {
@@ -805,9 +903,10 @@ function renderModal() {
 function renderManualUpdateQueueModal() {
   const view = manualUpdateQueueView(manualUpdateQueue, state.cards);
   const progress = view.total ? Math.round((view.completed / view.total) * 100) : 0;
+  const batchSize = Math.min(view.remaining, 10);
   const currentCard = view.current?.card;
   const current = currentCard
-    ? `<article class="queue-current"><div class="queue-current-art">${renderArt(currentCard)}</div><div class="queue-current-copy"><span>NEXT CARD · ${view.completed + 1} OF ${view.total}</span><strong>${html(currentCard.title)}</strong><small>${html(currentCard.code)} · ${nativeMoney(currentCard.nativePrice, currentCard.currency)}</small><a href="${html(safeUrl(currentCard.sourceUrl))}" target="_blank" rel="noopener noreferrer" data-action="queue-open" data-id="${html(currentCard.id)}">${view.current.active ? "OPEN AGAIN" : "OPEN YUYUTEI"} ↗</a></div></article>`
+    ? `<article class="queue-current"><div class="queue-current-art">${renderArt(currentCard)}</div><div class="queue-current-copy"><span>NEXT CARD · ${view.completed + 1} OF ${view.total}</span><strong>${html(currentCard.title)}</strong><small>${html(currentCard.code)} · ${nativeMoney(currentCard.nativePrice, currentCard.currency)}</small><a href="${html(safeUrl(currentCard.sourceUrl))}" data-action="queue-open" data-id="${html(currentCard.id)}">${view.current.active ? "OPEN AGAIN" : "OPEN ONE TAB"} ↗</a></div></article>`
     : `<div class="queue-complete"><strong>${view.total ? "QUEUE COMPLETE" : "NO YUYUTEI CARDS"}</strong><p>${view.total ? `All ${view.total} cards were updated in this round.` : "Add a Yuyutei card-page URL to use the manual update queue."}</p></div>`;
   const rows = view.entries.map(({ card, completed, active }) => `
     <div class="queue-row ${completed ? "complete" : active ? "active" : ""}">
@@ -816,7 +915,7 @@ function renderManualUpdateQueueModal() {
       <span>${completed ? "UPDATED" : active ? "OPENED" : "WAITING"}</span>
     </div>`).join("");
   return modalShell(
-    `<div class="modal-body update-queue-body"><div class="queue-instructions"><strong>FASTEST RELIABLE YUYUTEI FLOW</strong><span>Open next → click your CardBoy bookmark → save. CardBoy returns here with the next card ready.</span></div><div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
+    `<div class="modal-body update-queue-body"><div class="queue-instructions"><div><strong>ONE-TIME BOOKMARK UPGRADE</strong><span>Replace your old CardBoy bookmark with this version. It auto-saves queue updates and closes finished tabs.</span></div><a class="queue-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this over your existing CardBoy bookmark">DRAG NEW BOOKMARK</a></div>${batchSize ? `<div class="queue-batch"><div><strong>QUICK BATCH</strong><span>Open the tabs, then click your CardBoy bookmark once in each. No Save step.</span></div><button type="button" data-action="queue-open-batch">OPEN NEXT ${batchSize} ${batchSize === 1 ? "TAB" : "TABS"}</button></div>` : ""}<div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
     { title: "Manual update queue", className: "update-queue-modal" },
   );
 }
@@ -902,7 +1001,7 @@ function renderCardForm(card = null) {
       : "Fetches the card name, code, source price, and product image when available.";
   return modalShell(
     `<form class="modal-body" id="card-form" data-editing="${isEdit ? html(card.id) : ""}">
-      ${!isEdit ? `<div class="import-helper"><div><strong>ONE-CLICK YUYU-TEI IMPORT</strong><small>Drag this button to your browser bookmarks bar once. On any Yuyu-tei card page, click the bookmark to open CardBoy with every available detail filled in.</small></div><a class="import-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this button to your bookmarks bar">DRAG TO BOOKMARKS</a></div>` : ""}
+      ${!isEdit ? `<div class="import-helper"><div><strong>ONE-CLICK YUYU-TEI IMPORT</strong><small>Drag this button to your browser bookmarks bar once. Queue-opened cards save automatically; other Yuyu-tei pages still open a review form.</small></div><a class="import-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this button to your bookmarks bar">DRAG TO BOOKMARKS</a></div>` : ""}
       <div class="form-grid">
         <div class="form-fields">
           <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">${fetchButtonLabel(value.sourceUrl)}</button></div><small id="fetch-status"${pendingCardImport && (!isEdit || importedUpdate) ? ' class="import-success"' : ""}>${html(importStatus)}</small></div>
@@ -927,7 +1026,7 @@ function renderDetailsModal() {
   const monitor = monitoringInfo(card);
   const labels = ["SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG"];
   const directUpdate = isYuyuteiSourceUrl(card.sourceUrl)
-    ? `<div class="detail-source-update"><div><strong>DIRECT YUYUTEI UPDATE</strong><small>Open this listing, then click your CardBoy bookmark. The matching card will reopen ready to save.</small></div><a href="${html(safeUrl(card.sourceUrl))}" target="_blank" rel="noopener noreferrer">OPEN YUYUTEI ↗</a></div>`
+    ? `<div class="detail-source-update"><div><strong>DIRECT YUYUTEI UPDATE</strong><small>For automatic saving, use Update Queue. This direct link keeps the review-first workflow.</small></div><a href="${html(safeUrl(card.sourceUrl))}" target="_blank" rel="noopener noreferrer">OPEN YUYUTEI ↗</a></div>`
     : "";
   return modalShell(
     `<div class="modal-body"><div class="details-layout"><div class="detail-art">${renderArt(card)}</div><div class="details-copy"><div class="details-title-row"><div><div class="details-series" style="color:${series.color}">${html(card.series)}</div><div class="details-code">${html(card.code)} · ${html(card.title)}</div></div><button class="edit-detail-button" data-action="edit" data-id="${html(card.id)}">EDIT</button></div><div class="detail-price">${money(unitPhp(card))}</div><div class="detail-native">${nativeMoney(card.nativePrice, card.currency)} per card · ${card.quantity} ${card.quantity === 1 ? "copy" : "copies"}</div><div class="detail-tags"><div class="detail-ownership ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ Card I own · Included in dashboard" : "Watching · Not included in dashboard"}</div><div class="detail-monitor ${monitor.className}" title="${html(monitor.detail)}"><span></span>${monitor.label}</div></div><p class="detail-monitor-copy">${html(monitor.detail)}</p><div class="detail-stats"><div class="detail-stat"><span>Total value</span><strong>${money(phpValue(card))}</strong></div><div class="detail-stat"><span>24h move</span><strong class="${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "+" : ""}${card.change.toFixed(1)}%</strong></div><div class="detail-stat"><span>Last checked</span><strong>${formatDate(card.lastChecked)}</strong></div></div>${directUpdate}<div class="detail-source">Price source: <a href="${html(safeUrl(card.sourceUrl))}" target="_blank" rel="noopener noreferrer">${html(card.sourceUrl)}</a></div><div class="modal-chart-tabs">${["MAX", "1M", "3M", "6M", "1Y"].map((range) => `<button class="range-button ${range === "1Y" ? "active" : ""}">${range}</button>`).join("")}</div>${chartSvg(card.history.map((price) => price * state.rates[card.currency]), labels, series.color, `detail-${html(card.id)}`, "detail-chart")}</div></div></div>`,
@@ -1222,7 +1321,15 @@ async function handleAction(event) {
   } else if (action === "queue-reset") {
     resetManualUpdateQueue();
     render();
+  } else if (action === "queue-open-batch") {
+    openQuickUpdateBatch();
   } else if (action === "queue-open") {
+    event.preventDefault();
+    const card = state.cards.find((item) => item.id === target.dataset.id);
+    if (!card || !openQuickUpdateTab(card)) {
+      toast("Your browser blocked the tab. Allow pop-ups for CardBoy, then try again.");
+      return;
+    }
     manualUpdateQueue = markManualUpdateOpened(manualUpdateQueue, target.dataset.id, state.cards);
     saveManualUpdateQueue();
     setTimeout(render, 0);
@@ -1295,6 +1402,7 @@ async function saveCard(event) {
   const existing = editingId ? state.cards.find((card) => card.id === editingId) : null;
   const importedUpdate = Boolean(existing && pendingCardImport
     && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(pendingCardImport.sourceUrl));
+  const closeAfterSave = importedUpdate && pendingImportAutoSave;
   const nativePrice = Number(data.get("nativePrice"));
   const cardId = editingId || `${String(data.get("code")).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
   let image = String(data.get("image") || "");
@@ -1375,15 +1483,6 @@ async function saveCard(event) {
     state.notifications = state.notifications.slice(0, 30);
     state.lastPortfolioCheck = savedCard.lastChecked;
   }
-  try {
-    await backend.saveCard(savedCard, unitPhp(savedCard));
-    if (alert) {
-      const savedAlert = await backend.saveNotification(alert);
-      if (savedAlert?.id) alert.id = savedAlert.id;
-    }
-  } catch (error) {
-    toast(`Cloud card save failed: ${error.message}`);
-  }
   let queueAdvance = null;
   if (importedUpdate && editingId) {
     const completed = markManualUpdateComplete(manualUpdateQueue, savedCard.id, state.cards);
@@ -1392,6 +1491,16 @@ async function saveCard(event) {
       saveManualUpdateQueue();
       queueAdvance = manualUpdateQueueView(manualUpdateQueue, state.cards);
     }
+  }
+  saveState();
+  try {
+    await backend.saveCard(savedCard, unitPhp(savedCard));
+    if (alert) {
+      const savedAlert = await backend.saveNotification(alert);
+      if (savedAlert?.id) alert.id = savedAlert.id;
+    }
+  } catch (error) {
+    toast(`Cloud card save failed: ${error.message}`);
   }
   if (!editingId) backend.reorderCards(state.cards).catch((error) => toast(`Card order sync failed: ${error.message}`));
   pendingImageFile = null;
@@ -1408,6 +1517,11 @@ async function saveCard(event) {
   else if (priceMovement) toast(`Price ${priceMovement.change >= 0 ? "increase" : "decrease"} saved. A notification was created.`);
   else if (importedUpdate) toast("Price checked. The Yuyu-tei price has not changed.");
   else toast("Card details updated.");
+  autoImportStarted = false;
+  const completeAutoImport = autoImportCompletionResolve;
+  autoImportCompletionResolve = null;
+  completeAutoImport?.();
+  if (closeAfterSave) setTimeout(() => window.close(), 350);
 }
 
 async function fetchPreview() {
@@ -1677,9 +1791,15 @@ window.addEventListener("hashchange", () => {
 });
 
 window.addEventListener("storage", (event) => {
-  if (event.key !== UPDATE_QUEUE_KEY) return;
-  manualUpdateQueue = loadManualUpdateQueue();
-  if (state.modal === "update-queue") render();
+  if (event.key === STORAGE_KEY) {
+    refreshPortfolioFromStorage();
+    if (state.modal === "update-queue") render();
+    return;
+  }
+  if (event.key === UPDATE_QUEUE_KEY) {
+    manualUpdateQueue = loadManualUpdateQueue();
+    if (state.modal === "update-queue") render();
+  }
 });
 
 render();

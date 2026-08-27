@@ -60,6 +60,14 @@ export function manualUpdateQueueView(queue, cards = []) {
   };
 }
 
+export function manualUpdateBatch(queue, cards = [], limit = 10) {
+  const size = Math.max(1, Math.min(20, Number.parseInt(limit, 10) || 10));
+  return manualUpdateQueueView(queue, cards).entries
+    .filter((entry) => !entry.completed)
+    .slice(0, size)
+    .map((entry) => entry.card);
+}
+
 export function markManualUpdateOpened(queue, cardId, cards = []) {
   const normalized = normalizeManualUpdateQueue(queue, cards);
   const id = String(cardId);

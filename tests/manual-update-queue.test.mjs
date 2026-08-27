@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   createManualUpdateQueue,
+  manualUpdateBatch,
   manualUpdateCandidates,
   manualUpdateQueueView,
   markManualUpdateComplete,
@@ -50,4 +51,17 @@ test("normalization drops cards that no longer exist and ignores unrelated compl
   assert.deepEqual(normalized.ids, ["one", "two"]);
   assert.deepEqual(normalized.completedIds, ["one"]);
   assert.equal(normalized.activeId, null);
+});
+
+test("creates a bounded batch from only the remaining cards", () => {
+  const extraCards = Array.from({ length: 12 }, (_, index) => ({
+    id: `card-${index + 1}`,
+    sourceUrl: `https://yuyu-tei.jp/sell/opc/card/op01/${10001 + index}`,
+  }));
+  let queue = createManualUpdateQueue(extraCards);
+  queue = markManualUpdateComplete(queue, "card-1", extraCards).queue;
+  const batch = manualUpdateBatch(queue, extraCards, 10);
+  assert.equal(batch.length, 10);
+  assert.equal(batch[0].id, "card-2");
+  assert.equal(batch[9].id, "card-11");
 });

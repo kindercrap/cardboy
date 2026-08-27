@@ -1881,10 +1881,17 @@ h1 {
 .queue-instructions {
   padding: 11px 12px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 3px;
   border: 1px solid #d8dfaf;
   border-radius: 9px;
   background: #f1f5dc;
+}
+
+.queue-instructions > div {
+  display: grid;
+  gap: 3px;
 }
 
 .queue-instructions strong {
@@ -1897,6 +1904,74 @@ h1 {
   color: #687052;
   font-size: 9px;
   line-height: 1.4;
+}
+
+.queue-bookmark {
+  min-height: 32px;
+  margin-left: 10px;
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #95a342;
+  border-radius: 7px;
+  color: #475200;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  white-space: nowrap;
+  background: #fbfdf2;
+}
+
+.queue-batch {
+  margin-top: 10px;
+  padding: 11px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #252a2f;
+  border-radius: 9px;
+  color: #f8fafb;
+  background: #171a1d;
+}
+
+.queue-batch > div {
+  display: grid;
+  gap: 2px;
+}
+
+.queue-batch strong {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.queue-batch span {
+  color: #a5abb1;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.queue-batch button {
+  min-height: 34px;
+  padding: 0 13px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 7px;
+  color: #151719;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  background: var(--lime);
+  cursor: pointer;
+}
+
+.queue-batch button:hover,
+.queue-current-copy a:hover,
+.queue-bookmark:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
 }
 
 .queue-progress-copy {
@@ -2671,6 +2746,25 @@ h1 {
   .queue-current-copy a {
     width: 100%;
     margin-top: 9px;
+  }
+
+  .queue-instructions {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+
+  .queue-bookmark {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .queue-batch {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .queue-batch button {
+    width: 100%;
   }
 
   .filters {

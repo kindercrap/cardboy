@@ -55,7 +55,9 @@ Yuyu-tei currently blocks CardBoy's Supabase server from reading its product pag
 5. If the source URL is new, review the quantity and click **Add Card**. If that URL is already saved, CardBoy opens the existing card with the latest page price ready to review.
 6. Saving a changed imported price adds a price-history point and a CardBoy notification. Saving an unchanged price records the check without creating a false alert.
 
-The importer only prefills the form and never saves a card without confirmation. It runs on the Yuyu-tei page at the user's request, so no F12/Console workflow or paid proxy is required.
+For a faster refresh of saved cards, open **My Cards → Update Queue**, replace any older CardBoy bookmark with the current one, and choose **Open next 10 tabs**. Click the bookmark once in each opened Yuyu-tei tab. Queue-marked tabs return to CardBoy, serialize concurrent imports, save the exact source-URL match, update price history and notifications, and close automatically. A normal Yuyu-tei tab still uses the safer review form, and a new card is never added automatically.
+
+The importer runs on the Yuyu-tei page at the user's request, so no F12/Console workflow or paid proxy is required.
 
 In local preview mode, the 9:15 AM PHT fallback schedule runs while the local app server and browser page are open. In production, `.github/workflows/price-monitor.yml` runs unattended at 01:15 UTC / 09:15 PHT. It discovers exact Card-Value variants from the relevant set page, matches each variant through its Yuyutei `/sell/` link, stores one deduplicated observation per Philippine calendar day, and creates an in-app notification when that observed selling price moves. GitHub may start scheduled workflows a few minutes late during busy periods.
 
