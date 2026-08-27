@@ -2008,6 +2008,61 @@ h1 {
   font-size: 11px;
 }
 
+.detail-source-update {
+  margin-bottom: 12px;
+  padding: 10px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #d9e8a4;
+  border-radius: 9px;
+  background: #f1f6df;
+}
+
+.detail-source-update strong,
+.detail-source-update small {
+  display: block;
+}
+
+.detail-source-update strong {
+  margin-bottom: 2px;
+  color: #4c5900;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.detail-source-update small {
+  max-width: 330px;
+  color: #727967;
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.detail-source-update a {
+  min-height: 33px;
+  padding: 0 11px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: #17191c;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  background: var(--lime);
+  transition: transform 160ms ease, filter 160ms ease;
+}
+
+.detail-source-update a:hover,
+.detail-source-update a:focus-visible {
+  outline: none;
+  transform: translateY(-1px);
+  filter: brightness(0.96);
+}
+
 .detail-source {
   margin-bottom: 15px;
   overflow: hidden;
@@ -2432,6 +2487,15 @@ h1 {
 
   .details-copy {
     padding-top: 0;
+  }
+
+  .detail-source-update {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .detail-source-update a {
+    width: 100%;
   }
 
   .modal-actions {
