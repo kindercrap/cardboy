@@ -8,6 +8,17 @@ function isYuyuteiUrl(value) {
   }
 }
 
+export function parseQuickUpdateSource(value) {
+  try {
+    const url = new URL(value);
+    const quick = url.hash === "#cardboy-quick";
+    if (quick) url.hash = "";
+    return { sourceUrl: url.href, quick };
+  } catch {
+    return { sourceUrl: String(value || ""), quick: false };
+  }
+}
+
 export function manualUpdateCandidates(cards = []) {
   return cards.filter((card) => card?.id && isYuyuteiUrl(card.sourceUrl ?? card.source_url));
 }
@@ -58,14 +69,6 @@ export function manualUpdateQueueView(queue, cards = []) {
     completed: entries.filter((entry) => entry.completed).length,
     remaining: entries.filter((entry) => !entry.completed).length,
   };
-}
-
-export function manualUpdateBatch(queue, cards = [], limit = 10) {
-  const size = Math.max(1, Math.min(20, Number.parseInt(limit, 10) || 10));
-  return manualUpdateQueueView(queue, cards).entries
-    .filter((entry) => !entry.completed)
-    .slice(0, size)
-    .map((entry) => entry.card);
 }
 
 export function markManualUpdateOpened(queue, cardId, cards = []) {

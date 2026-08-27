@@ -2,12 +2,12 @@ import { backend } from "./backend.js";
 import { normalizeCardOrder, toggleCardPinned } from "./card-order.js";
 import {
   createManualUpdateQueue,
-  manualUpdateBatch,
   manualUpdateCandidates,
   manualUpdateQueueView,
   markManualUpdateComplete,
   markManualUpdateOpened,
   normalizeManualUpdateQueue,
+  parseQuickUpdateSource,
 } from "./manual-update-queue.js";
 import {
   createInitialMonitorRun,
@@ -165,7 +165,8 @@ function saveState() {
 
 function normalizeCardImport(value) {
   if (!value || typeof value !== "object") return null;
-  const sourceUrl = safeUrl(value.sourceUrl);
+  const queuedSource = parseQuickUpdateSource(value.sourceUrl);
+  const sourceUrl = safeUrl(queuedSource.sourceUrl);
   if (sourceUrl === "#") return null;
   const imageUrl = safeUrl(value.image);
   const nativePrice = Number(value.nativePrice);
@@ -192,6 +193,7 @@ function loadPendingCardImport() {
   } catch {
     value = null;
   }
+  if (parseQuickUpdateSource(value?.sourceUrl).quick) pendingImportAutoSave = true;
   const normalized = normalizeCardImport(value);
   if (normalized) sessionStorage.setItem(CARD_IMPORT_KEY, JSON.stringify(normalized));
   else sessionStorage.removeItem(CARD_IMPORT_KEY);
@@ -229,30 +231,31 @@ function resetManualUpdateQueue() {
   return manualUpdateQueueView(manualUpdateQueue, state.cards);
 }
 
-function openQuickUpdateTab(card) {
+function quickUpdateUrl(card) {
   try {
     const url = new URL(card.sourceUrl);
     url.hash = "cardboy-quick";
-    return window.open(url.href, "_blank");
+    return url.href;
   } catch {
     return null;
   }
 }
 
-function openQuickUpdateBatch() {
-  const cards = manualUpdateBatch(manualUpdateQueue, state.cards, 10);
-  let opened = 0;
-  cards.forEach((card) => {
-    if (openQuickUpdateTab(card)) opened += 1;
-  });
-  if (cards[0]) {
-    manualUpdateQueue = markManualUpdateOpened(manualUpdateQueue, cards[0].id, state.cards);
-    saveManualUpdateQueue();
+function openQuickUpdateTab(card) {
+  const url = quickUpdateUrl(card);
+  return url ? window.open(url, "_blank") : null;
+}
+
+function startQuickUpdate(card) {
+  if (!card || !openQuickUpdateTab(card)) {
+    toast("Your browser blocked the update tab. Allow pop-ups for CardBoy, then try again.");
+    return false;
   }
+  manualUpdateQueue = markManualUpdateOpened(manualUpdateQueue, card.id, state.cards);
+  saveManualUpdateQueue();
   render();
-  if (!opened) toast("Your browser blocked the tabs. Allow pop-ups for CardBoy, then try again.");
-  else if (opened < cards.length) toast(`Opened ${opened} of ${cards.length} tabs. Allow pop-ups to open the rest.`);
-  else toast(`${opened} Yuyu-tei tabs opened. Click your CardBoy bookmark once in each tab.`);
+  toast("Quick update started. Click your CardBoy bookmark once on each card page.");
+  return true;
 }
 
 function canonicalSourceUrl(value) {
@@ -903,7 +906,6 @@ function renderModal() {
 function renderManualUpdateQueueModal() {
   const view = manualUpdateQueueView(manualUpdateQueue, state.cards);
   const progress = view.total ? Math.round((view.completed / view.total) * 100) : 0;
-  const batchSize = Math.min(view.remaining, 10);
   const currentCard = view.current?.card;
   const current = currentCard
     ? `<article class="queue-current"><div class="queue-current-art">${renderArt(currentCard)}</div><div class="queue-current-copy"><span>NEXT CARD · ${view.completed + 1} OF ${view.total}</span><strong>${html(currentCard.title)}</strong><small>${html(currentCard.code)} · ${nativeMoney(currentCard.nativePrice, currentCard.currency)}</small><a href="${html(safeUrl(currentCard.sourceUrl))}" data-action="queue-open" data-id="${html(currentCard.id)}">${view.current.active ? "OPEN AGAIN" : "OPEN ONE TAB"} ↗</a></div></article>`
@@ -915,7 +917,7 @@ function renderManualUpdateQueueModal() {
       <span>${completed ? "UPDATED" : active ? "OPENED" : "WAITING"}</span>
     </div>`).join("");
   return modalShell(
-    `<div class="modal-body update-queue-body"><div class="queue-instructions"><div><strong>ONE-TIME BOOKMARK UPGRADE</strong><span>Replace your old CardBoy bookmark with this version. It auto-saves queue updates and closes finished tabs.</span></div><a class="queue-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this over your existing CardBoy bookmark">DRAG NEW BOOKMARK</a></div>${batchSize ? `<div class="queue-batch"><div><strong>QUICK BATCH</strong><span>Open the tabs, then click your CardBoy bookmark once in each. No Save step.</span></div><button type="button" data-action="queue-open-batch">OPEN NEXT ${batchSize} ${batchSize === 1 ? "TAB" : "TABS"}</button></div>` : ""}<div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
+    `<div class="modal-body update-queue-body"><div class="queue-instructions"><div><strong>RECOMMENDED BOOKMARK UPGRADE</strong><span>Replace your old CardBoy bookmark once for the cleanest one-tab flow. Older bookmarks now auto-save too.</span></div><a class="queue-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this over your existing CardBoy bookmark">DRAG NEW BOOKMARK</a></div>${currentCard ? `<div class="queue-batch"><div><strong>ONE-TAB QUICK UPDATE</strong><span>Click the bookmark on each card. CardBoy saves automatically, then moves the same tab to the next card.</span></div><button type="button" data-action="queue-start-fast">START QUICK UPDATE</button></div>` : ""}<div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
     { title: "Manual update queue", className: "update-queue-modal" },
   );
 }
@@ -1321,18 +1323,13 @@ async function handleAction(event) {
   } else if (action === "queue-reset") {
     resetManualUpdateQueue();
     render();
-  } else if (action === "queue-open-batch") {
-    openQuickUpdateBatch();
+  } else if (action === "queue-start-fast") {
+    const current = manualUpdateQueueView(manualUpdateQueue, state.cards).current?.card;
+    startQuickUpdate(current);
   } else if (action === "queue-open") {
     event.preventDefault();
     const card = state.cards.find((item) => item.id === target.dataset.id);
-    if (!card || !openQuickUpdateTab(card)) {
-      toast("Your browser blocked the tab. Allow pop-ups for CardBoy, then try again.");
-      return;
-    }
-    manualUpdateQueue = markManualUpdateOpened(manualUpdateQueue, target.dataset.id, state.cards);
-    saveManualUpdateQueue();
-    setTimeout(render, 0);
+    startQuickUpdate(card);
   } else if (action === "details") {
     state.activeCardId = target.dataset.id;
     openModal("details");
@@ -1521,7 +1518,13 @@ async function saveCard(event) {
   const completeAutoImport = autoImportCompletionResolve;
   autoImportCompletionResolve = null;
   completeAutoImport?.();
-  if (closeAfterSave) setTimeout(() => window.close(), 350);
+  if (closeAfterSave) {
+    const nextUrl = queueAdvance?.current?.card ? quickUpdateUrl(queueAdvance.current.card) : null;
+    setTimeout(() => {
+      if (nextUrl) location.replace(nextUrl);
+      else window.close();
+    }, 350);
+  }
 }
 
 async function fetchPreview() {
