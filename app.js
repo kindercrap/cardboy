@@ -1,6 +1,7 @@
 import { backend } from "./backend.js";
 import { normalizeCardOrder, toggleCardPinned } from "./card-order.js";
 import {
+  applyPriceOnlyImport,
   createManualUpdateQueue,
   manualUpdateCandidates,
   manualUpdateQueueView,
@@ -917,7 +918,7 @@ function renderManualUpdateQueueModal() {
       <span>${completed ? "UPDATED" : active ? "OPENED" : "WAITING"}</span>
     </div>`).join("");
   return modalShell(
-    `<div class="modal-body update-queue-body"><div class="queue-instructions"><div><strong>RECOMMENDED BOOKMARK UPGRADE</strong><span>Replace your old CardBoy bookmark once for the cleanest one-tab flow. Older bookmarks now auto-save too.</span></div><a class="queue-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this over your existing CardBoy bookmark">DRAG NEW BOOKMARK</a></div>${currentCard ? `<div class="queue-batch"><div><strong>ONE-TAB QUICK UPDATE</strong><span>Click the bookmark on each card. CardBoy saves automatically, then moves the same tab to the next card.</span></div><button type="button" data-action="queue-start-fast">START QUICK UPDATE</button></div>` : ""}<div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
+    `<div class="modal-body update-queue-body"><div class="queue-instructions"><div><strong>RECOMMENDED BOOKMARK UPGRADE</strong><span>Replace your old CardBoy bookmark once for the cleanest one-tab flow. Older bookmarks now auto-save too.</span></div><a class="queue-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this over your existing CardBoy bookmark">DRAG NEW BOOKMARK</a></div>${currentCard ? `<div class="queue-batch"><div><strong>ONE-TAB QUICK UPDATE</strong><span>Only the source price is changed. CardBoy preserves every other card detail, then moves to the next card.</span></div><button type="button" data-action="queue-start-fast">START QUICK UPDATE</button></div>` : ""}<div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
     { title: "Manual update queue", className: "update-queue-modal" },
   );
 }
@@ -976,13 +977,7 @@ function renderCardForm(card = null) {
   const importedUpdate = isEdit && pendingCardImport
     && canonicalSourceUrl(card.sourceUrl) === canonicalSourceUrl(pendingCardImport.sourceUrl);
   const value = importedUpdate
-    ? {
-        ...card,
-        ...pendingCardImport,
-        quantity: card.quantity,
-        owned: card.owned,
-        image: pendingCardImport.image || card.image,
-      }
+    ? applyPriceOnlyImport(card, pendingCardImport, card.lastChecked)
     : card || pendingCardImport || {
     sourceUrl: "",
     series: "ONE PIECE",
@@ -1403,7 +1398,7 @@ async function saveCard(event) {
   const nativePrice = Number(data.get("nativePrice"));
   const cardId = editingId || `${String(data.get("code")).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
   let image = String(data.get("image") || "");
-  if (pendingImageFile && backend.isReady && backend.user) {
+  if (pendingImageFile && !importedUpdate && backend.isReady && backend.user) {
     try {
       image = await backend.uploadImage(pendingImageFile, cardId);
     } catch (error) {
@@ -1411,7 +1406,8 @@ async function saveCard(event) {
       return;
     }
   }
-  const payload = {
+  const checkedAt = new Date().toISOString();
+  const payload = importedUpdate ? applyPriceOnlyImport(existing, { nativePrice }, checkedAt) : {
     sourceUrl: String(data.get("sourceUrl")).trim(),
     cardValueUrl: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
       ? existing.cardValueUrl || null
@@ -1424,7 +1420,7 @@ async function saveCard(event) {
     nativePrice,
     image,
     owned: data.get("owned") === "on",
-    lastChecked: new Date().toISOString(),
+    lastChecked: checkedAt,
     monitorStatus: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
       ? existing.monitorStatus || "pending"
       : "pending",

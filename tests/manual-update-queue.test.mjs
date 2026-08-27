@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyPriceOnlyImport,
   createManualUpdateQueue,
   manualUpdateCandidates,
   manualUpdateQueueView,
@@ -61,5 +62,40 @@ test("recognizes and removes the quick-update marker used by old bookmarks", () 
   assert.deepEqual(parseQuickUpdateSource("https://yuyu-tei.jp/sell/opc/card/op09/10155"), {
     sourceUrl: "https://yuyu-tei.jp/sell/opc/card/op09/10155",
     quick: false,
+  });
+});
+
+test("an imported update changes only price and check time", () => {
+  const existing = {
+    id: "one",
+    sourceUrl: "https://yuyu-tei.jp/sell/opc/card/op01/10001",
+    series: "ONE PIECE",
+    code: "OP01-001",
+    title: "Saved title",
+    quantity: 4,
+    currency: "JPY",
+    nativePrice: 12800,
+    image: "saved.jpg",
+    owned: false,
+    pinned: true,
+    sortOrder: 7,
+    monitorStatus: "supported",
+    lastChecked: "2026-08-26T00:00:00.000Z",
+  };
+  const result = applyPriceOnlyImport(existing, {
+    sourceUrl: "https://changed.example/card",
+    series: "GUNDAM",
+    code: "WRONG",
+    title: "Wrong title",
+    quantity: 1,
+    currency: "USD",
+    nativePrice: 39800,
+    image: "wrong.jpg",
+    owned: true,
+  }, "2026-08-27T00:00:00.000Z");
+  assert.deepEqual(result, {
+    ...existing,
+    nativePrice: 39800,
+    lastChecked: "2026-08-27T00:00:00.000Z",
   });
 });

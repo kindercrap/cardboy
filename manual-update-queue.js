@@ -19,6 +19,17 @@ export function parseQuickUpdateSource(value) {
   }
 }
 
+export function applyPriceOnlyImport(existingCard, importedCard, checkedAt = new Date().toISOString()) {
+  if (!existingCard || typeof existingCard !== "object") return null;
+  const nativePrice = Number(importedCard?.nativePrice);
+  if (!Number.isFinite(nativePrice) || nativePrice < 0) return null;
+  return {
+    ...existingCard,
+    nativePrice,
+    lastChecked: checkedAt,
+  };
+}
+
 export function manualUpdateCandidates(cards = []) {
   return cards.filter((card) => card?.id && isYuyuteiUrl(card.sourceUrl ?? card.source_url));
 }
