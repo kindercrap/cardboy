@@ -16,7 +16,7 @@ Open `http://127.0.0.1:4173`.
 
 - Quantity-aware portfolio dashboard and collection totals
 - Portfolio history and series-allocation graphs
-- Filterable card gallery with unique series colors
+- Card gallery with series and owned/watching filters, name/code search, and value, price, movement, quantity, recency, and name sorting
 - Drag-to-reorder collection cards with cloud-synced custom ordering
 - Pin priority cards to a persistent top group while keeping each group reorderable
 - “Card I own” tags, with dashboard values and graphs limited to owned cards

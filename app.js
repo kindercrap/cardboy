@@ -1,5 +1,5 @@
 import { backend } from "./backend.js";
-import { normalizeCardOrder, toggleCardPinned } from "./card-order.js";
+import { filterAndSortCards, normalizeCardOrder, toggleCardPinned } from "./card-order.js";
 import {
   applyPriceOnlyImport,
   createManualUpdateQueue,
@@ -35,6 +35,17 @@ const SERIES = {
   POKÉMON: { color: "#b88cff", bg: "#443090", shape: "#8d76ee", mark: "PK" },
   "DRAGON BALL": { color: "#ffad4b", bg: "#8c391d", shape: "#ff9448", mark: "DB" },
 };
+
+const CARD_SORT_OPTIONS = [
+  ["CUSTOM", "Custom order"],
+  ["TOTAL_VALUE_DESC", "Total value: high to low"],
+  ["UNIT_PRICE_DESC", "Unit price: high to low"],
+  ["CHANGE_DESC", "Biggest gain"],
+  ["CHANGE_ASC", "Biggest drop"],
+  ["QUANTITY_DESC", "Quantity: high to low"],
+  ["RECENT_DESC", "Recently checked"],
+  ["NAME_ASC", "Name: A to Z"],
+];
 
 const defaultCards = [
   {
@@ -94,6 +105,9 @@ const initialState = {
   schemaVersion: APP_SCHEMA_VERSION,
   page: location.hash === "#cards" ? "cards" : "dashboard",
   filter: "ALL",
+  ownershipFilter: "ALL",
+  cardSort: "CUSTOM",
+  cardSearch: "",
   modal: null,
   activeCardId: null,
   user: null,
@@ -835,7 +849,14 @@ function renderHoldings() {
 
 function renderCards() {
   const filters = ["ALL", ...new Set(state.cards.map((card) => card.series))];
-  const filtered = state.filter === "ALL" ? state.cards : state.cards.filter((card) => card.series === state.filter);
+  const filtered = filterAndSortCards(state.cards, {
+    series: state.filter,
+    ownership: state.ownershipFilter,
+    search: state.cardSearch,
+    sort: state.cardSort,
+    rates: state.rates,
+  });
+  const hasViewFilters = state.filter !== "ALL" || state.ownershipFilter !== "ALL" || Boolean(state.cardSearch);
   const portfolioCards = ownedCards();
   const ownedUnits = portfolioCards.reduce((sum, card) => sum + card.quantity, 0);
   const monitoredCards = state.cards.filter((card) => card.monitorStatus === "active").length;
@@ -852,11 +873,19 @@ function renderCards() {
         </div>
         <div class="toolbar-actions"><button class="queue-toolbar-button" data-action="update-queue"><span>UPDATE QUEUE</span><b>${manualCards}</b></button><button class="primary-button dark" data-action="add"><img src="images/icons/icon-add.svg" alt=""/><span>ADD CARD</span></button></div>
       </div>
-      <div class="cards-grid" data-card-grid>
+      <div class="collection-controls">
+        <label class="collection-search"><span>SEARCH</span><input id="card-search" type="search" value="${html(state.cardSearch)}" placeholder="Name or card code" autocomplete="off"/></label>
+        <div class="ownership-filters" aria-label="Filter by ownership">
+          ${[["ALL", "All cards"], ["OWNED", "Owned"], ["WATCHING", "Watching"]].map(([value, label]) => `<button class="ownership-filter ${state.ownershipFilter === value ? "active" : ""}" data-action="ownership-filter" data-ownership="${value}">${label}</button>`).join("")}
+        </div>
+        <label class="collection-sort"><span>SORT</span><select id="card-sort">${CARD_SORT_OPTIONS.map(([value, label]) => `<option value="${value}" ${state.cardSort === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+        <div class="collection-result"><strong>${filtered.length}</strong><span>of ${state.cards.length} shown${state.cardSort !== "CUSTOM" ? " · pinned stay first" : ""}</span>${hasViewFilters ? '<button data-action="clear-card-filters">CLEAR FILTERS</button>' : ""}</div>
+      </div>
+      <div class="cards-grid" data-card-grid data-sort-mode="${html(state.cardSort)}">
         ${
           filtered.length
             ? filtered.map(renderCardTile).join("")
-            : `<div class="empty-state"><div class="empty-icon">${icon("cards")}</div><h3>No cards in this series</h3><p>Add a card or choose a different filter.</p><button class="primary-button" data-action="add">ADD A CARD</button></div>`
+            : `<div class="empty-state"><div class="empty-icon">${icon("cards")}</div><h3>No matching cards</h3><p>Try another series, ownership tag, or search term.</p><button class="primary-button" data-action="clear-card-filters">CLEAR FILTERS</button></div>`
         }
       </div>
     </section>
@@ -866,8 +895,9 @@ function renderCards() {
 function renderCardTile(card) {
   const series = SERIES[card.series] || { color: "#c8ff34" };
   const monitor = monitoringInfo(card);
+  const canReorder = state.cardSort === "CUSTOM";
   return `
-    <article class="card-tile ${card.pinned ? "is-pinned" : ""}" data-id="${html(card.id)}" data-pinned="${card.pinned ? "true" : "false"}" draggable="true">
+    <article class="card-tile ${card.pinned ? "is-pinned" : ""}" data-id="${html(card.id)}" data-pinned="${card.pinned ? "true" : "false"}" draggable="${canReorder ? "true" : "false"}">
       <button class="card-open" data-action="details" data-id="${html(card.id)}" aria-label="View ${html(card.title)} card details">
         <div class="card-art">${renderArt(card)}<span class="quantity-pill">× ${card.quantity}</span><span class="ownership-pill ${card.owned !== false ? "owned" : "watching"}">${card.owned !== false ? "✓ OWNED" : "WATCHING"}</span><span class="monitoring-pill ${monitor.className}" title="${html(monitor.detail)}">${monitor.label}</span></div>
         <div class="card-body">
@@ -875,7 +905,7 @@ function renderCardTile(card) {
           <div class="card-price-row"><div class="card-price-stack"><strong class="card-price">${money(unitPhp(card))}</strong><small>${nativeMoney(card.nativePrice, card.currency)}</small></div><span class="price-change ${card.change >= 0 ? "positive" : "negative"}">${card.change >= 0 ? "↗ +" : "↘ "}${card.change.toFixed(1)}%</span></div>
         </div>
       </button>
-      <button class="drag-handle" type="button" data-drag-handle aria-label="Drag ${html(card.title)} to reorder, or use arrow keys" title="Drag to reorder"><span></span><span></span><span></span><span></span><span></span><span></span></button>
+      <button class="drag-handle ${canReorder ? "" : "disabled"}" type="button" ${canReorder ? "data-drag-handle" : "disabled"} aria-label="${canReorder ? `Drag ${html(card.title)} to reorder, or use arrow keys` : "Switch sorting to Custom order to drag cards"}" title="${canReorder ? "Drag to reorder" : "Switch to Custom order to reorder"}"><span></span><span></span><span></span><span></span><span></span><span></span></button>
       <button class="pin-button ${card.pinned ? "active" : ""}" type="button" data-action="pin" data-id="${html(card.id)}" aria-label="${card.pinned ? "Unpin" : "Pin"} ${html(card.title)}" aria-pressed="${card.pinned ? "true" : "false"}" title="${card.pinned ? "Unpin card" : "Pin card to top"}">${icon("pin")}</button>
     </article>
   `;
@@ -1066,8 +1096,23 @@ function bindEvents() {
     const button = document.querySelector('#card-form [data-action="fetch"]');
     if (button && !button.disabled) button.textContent = fetchButtonLabel(event.currentTarget.value);
   });
+  document.querySelector("#card-search")?.addEventListener("input", (event) => {
+    state.cardSearch = event.currentTarget.value;
+    saveState();
+    render();
+    requestAnimationFrame(() => {
+      const input = document.querySelector("#card-search");
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
+  });
+  document.querySelector("#card-sort")?.addEventListener("change", (event) => {
+    state.cardSort = event.currentTarget.value;
+    saveState();
+    render();
+  });
   const cardGrid = document.querySelector("[data-card-grid]");
-  if (cardGrid) {
+  if (cardGrid && state.cardSort === "CUSTOM") {
     cardGrid.addEventListener("dragover", handleCardDragOver);
     cardGrid.addEventListener("drop", finishNativeCardDrag);
     cardGrid.querySelectorAll(".card-tile").forEach((tile) => {
@@ -1340,6 +1385,17 @@ async function handleAction(event) {
     closeModal();
   } else if (action === "filter") {
     state.filter = target.dataset.filter;
+    saveState();
+    render();
+  } else if (action === "ownership-filter") {
+    state.ownershipFilter = target.dataset.ownership;
+    saveState();
+    render();
+  } else if (action === "clear-card-filters") {
+    state.filter = "ALL";
+    state.ownershipFilter = "ALL";
+    state.cardSearch = "";
+    saveState();
     render();
   } else if (action === "fetch") {
     fetchPreview();
