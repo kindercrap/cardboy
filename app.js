@@ -1,6 +1,14 @@
 import { backend } from "./backend.js";
 import { normalizeCardOrder, toggleCardPinned } from "./card-order.js";
 import {
+  createManualUpdateQueue,
+  manualUpdateCandidates,
+  manualUpdateQueueView,
+  markManualUpdateComplete,
+  markManualUpdateOpened,
+  normalizeManualUpdateQueue,
+} from "./manual-update-queue.js";
+import {
   createInitialMonitorRun,
   MONITOR_STATUS_ACTIVE_POLL_MS,
   MONITOR_STATUS_IDLE_POLL_MS,
@@ -12,6 +20,7 @@ import {
 
 const STORAGE_KEY = "cardboy-demo-v1";
 const CARD_IMPORT_KEY = "cardboy-pending-import-v1";
+const UPDATE_QUEUE_KEY = "cardboy-manual-update-queue-v1";
 const APP_SCHEMA_VERSION = 5;
 const DAILY_CHECK_HOUR = 9;
 const DAILY_CHECK_MINUTE = 15;
@@ -97,6 +106,7 @@ const initialState = {
 
 let state = loadState();
 let pendingCardImport = loadPendingCardImport();
+let manualUpdateQueue = loadManualUpdateQueue();
 let pendingImageFile = null;
 let backendSyncInProgress = false;
 let monitorStatusSyncInProgress = false;
@@ -191,6 +201,26 @@ function loadPendingCardImport() {
 function clearPendingCardImport() {
   pendingCardImport = null;
   sessionStorage.removeItem(CARD_IMPORT_KEY);
+}
+
+function loadManualUpdateQueue() {
+  try {
+    return normalizeManualUpdateQueue(JSON.parse(localStorage.getItem(UPDATE_QUEUE_KEY)), state.cards);
+  } catch {
+    return null;
+  }
+}
+
+function saveManualUpdateQueue() {
+  manualUpdateQueue = normalizeManualUpdateQueue(manualUpdateQueue, state.cards);
+  if (manualUpdateQueue) localStorage.setItem(UPDATE_QUEUE_KEY, JSON.stringify(manualUpdateQueue));
+  else localStorage.removeItem(UPDATE_QUEUE_KEY);
+}
+
+function resetManualUpdateQueue() {
+  manualUpdateQueue = createManualUpdateQueue(state.cards);
+  saveManualUpdateQueue();
+  return manualUpdateQueueView(manualUpdateQueue, state.cards);
 }
 
 function canonicalSourceUrl(value) {
@@ -708,6 +738,7 @@ function renderCards() {
   const ownedUnits = portfolioCards.reduce((sum, card) => sum + card.quantity, 0);
   const monitoredCards = state.cards.filter((card) => card.monitorStatus === "active").length;
   const pinnedCards = state.cards.filter((card) => card.pinned === true).length;
+  const manualCards = manualUpdateCandidates(state.cards).length;
   return `
     <section class="page">
       <div class="page-head">
@@ -717,7 +748,7 @@ function renderCards() {
         <div class="filters" aria-label="Filter by card series">
           ${filters.map((filter) => `<button class="filter-button ${state.filter === filter ? "active" : ""}" data-action="filter" data-filter="${html(filter)}">${html(filter)}</button>`).join("")}
         </div>
-        <button class="primary-button dark" data-action="add"><img src="images/icons/icon-add.svg" alt=""/><span>ADD CARD</span></button>
+        <div class="toolbar-actions"><button class="queue-toolbar-button" data-action="update-queue"><span>UPDATE QUEUE</span><b>${manualCards}</b></button><button class="primary-button dark" data-action="add"><img src="images/icons/icon-add.svg" alt=""/><span>ADD CARD</span></button></div>
       </div>
       <div class="cards-grid" data-card-grid>
         ${
@@ -767,7 +798,27 @@ function renderModal() {
   if (state.modal === "add") return renderCardForm();
   if (state.modal === "edit") return renderCardForm(state.cards.find((card) => card.id === state.activeCardId));
   if (state.modal === "details") return renderDetailsModal();
+  if (state.modal === "update-queue") return renderManualUpdateQueueModal();
   return "";
+}
+
+function renderManualUpdateQueueModal() {
+  const view = manualUpdateQueueView(manualUpdateQueue, state.cards);
+  const progress = view.total ? Math.round((view.completed / view.total) * 100) : 0;
+  const currentCard = view.current?.card;
+  const current = currentCard
+    ? `<article class="queue-current"><div class="queue-current-art">${renderArt(currentCard)}</div><div class="queue-current-copy"><span>NEXT CARD · ${view.completed + 1} OF ${view.total}</span><strong>${html(currentCard.title)}</strong><small>${html(currentCard.code)} · ${nativeMoney(currentCard.nativePrice, currentCard.currency)}</small><a href="${html(safeUrl(currentCard.sourceUrl))}" target="_blank" rel="noopener noreferrer" data-action="queue-open" data-id="${html(currentCard.id)}">${view.current.active ? "OPEN AGAIN" : "OPEN YUYUTEI"} ↗</a></div></article>`
+    : `<div class="queue-complete"><strong>${view.total ? "QUEUE COMPLETE" : "NO YUYUTEI CARDS"}</strong><p>${view.total ? `All ${view.total} cards were updated in this round.` : "Add a Yuyutei card-page URL to use the manual update queue."}</p></div>`;
+  const rows = view.entries.map(({ card, completed, active }) => `
+    <div class="queue-row ${completed ? "complete" : active ? "active" : ""}">
+      <div class="queue-thumb">${renderArt(card)}</div>
+      <div class="queue-row-copy"><strong>${html(card.title)}</strong><small>${html(card.code)} · ${nativeMoney(card.nativePrice, card.currency)}</small></div>
+      <span>${completed ? "UPDATED" : active ? "OPENED" : "WAITING"}</span>
+    </div>`).join("");
+  return modalShell(
+    `<div class="modal-body update-queue-body"><div class="queue-instructions"><strong>FASTEST RELIABLE YUYUTEI FLOW</strong><span>Open next → click your CardBoy bookmark → save. CardBoy returns here with the next card ready.</span></div><div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
+    { title: "Manual update queue", className: "update-queue-modal" },
+  );
 }
 
 function modalShell(content, options = {}) {
@@ -1164,6 +1215,17 @@ async function handleAction(event) {
     pendingImageFile = null;
     state.activeCardId = null;
     openModal("add");
+  } else if (action === "update-queue") {
+    const existing = manualUpdateQueueView(manualUpdateQueue, state.cards);
+    if (!existing.total) resetManualUpdateQueue();
+    openModal("update-queue");
+  } else if (action === "queue-reset") {
+    resetManualUpdateQueue();
+    render();
+  } else if (action === "queue-open") {
+    manualUpdateQueue = markManualUpdateOpened(manualUpdateQueue, target.dataset.id, state.cards);
+    saveManualUpdateQueue();
+    setTimeout(render, 0);
   } else if (action === "details") {
     state.activeCardId = target.dataset.id;
     openModal("details");
@@ -1322,16 +1384,27 @@ async function saveCard(event) {
   } catch (error) {
     toast(`Cloud card save failed: ${error.message}`);
   }
+  let queueAdvance = null;
+  if (importedUpdate && editingId) {
+    const completed = markManualUpdateComplete(manualUpdateQueue, savedCard.id, state.cards);
+    if (completed.changed) {
+      manualUpdateQueue = completed.queue;
+      saveManualUpdateQueue();
+      queueAdvance = manualUpdateQueueView(manualUpdateQueue, state.cards);
+    }
+  }
   if (!editingId) backend.reorderCards(state.cards).catch((error) => toast(`Card order sync failed: ${error.message}`));
   pendingImageFile = null;
   clearPendingCardImport();
-  state.modal = null;
+  state.modal = queueAdvance ? "update-queue" : null;
   state.filter = "ALL";
   state.page = "cards";
   history.replaceState(null, "", "#cards");
   saveState();
   render();
-  if (!editingId) toast("Card added to your collection.");
+  if (queueAdvance?.remaining) toast(`Update saved. ${queueAdvance.remaining} card${queueAdvance.remaining === 1 ? "" : "s"} remaining.`);
+  else if (queueAdvance) toast("Manual update queue complete.");
+  else if (!editingId) toast("Card added to your collection.");
   else if (priceMovement) toast(`Price ${priceMovement.change >= 0 ? "increase" : "decrease"} saved. A notification was created.`);
   else if (importedUpdate) toast("Price checked. The Yuyu-tei price has not changed.");
   else toast("Card details updated.");
@@ -1601,6 +1674,12 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("hashchange", () => {
   state.page = location.hash === "#cards" ? "cards" : "dashboard";
   render();
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key !== UPDATE_QUEUE_KEY) return;
+  manualUpdateQueue = loadManualUpdateQueue();
+  if (state.modal === "update-queue") render();
 });
 
 render();
