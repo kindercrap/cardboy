@@ -204,6 +204,18 @@ function canonicalSourceUrl(value) {
   }
 }
 
+function isYuyuteiSourceUrl(value) {
+  try {
+    return /(^|\.)yuyu-tei\.jp$/i.test(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function fetchButtonLabel(value) {
+  return isYuyuteiSourceUrl(value) ? "FETCH IMAGE" : "FETCH DETAILS";
+}
+
 function importedCardMatch() {
   if (!pendingCardImport) return null;
   const importedSource = canonicalSourceUrl(pendingCardImport.sourceUrl);
@@ -834,13 +846,15 @@ function renderCardForm(card = null) {
     ? `Existing card matched by its source URL. Stored price: ${nativeMoney(card.nativePrice, card.currency)} · Latest page price: ${nativeMoney(Number(value.nativePrice), value.currency)}.${pendingCardImport.availability === "OutOfStock" ? " This listing is currently out of stock." : ""}`
     : !isEdit && pendingCardImport
       ? `Imported directly from Yuyu-tei.${pendingCardImport.availability === "OutOfStock" ? " This listing is currently out of stock." : ""}`
-    : "Fetches the card name, code, source price, and product image when available.";
+    : isYuyuteiSourceUrl(value.sourceUrl)
+      ? "Fetches the card image from Yuyutei. The stored price will not be changed."
+      : "Fetches the card name, code, source price, and product image when available.";
   return modalShell(
     `<form class="modal-body" id="card-form" data-editing="${isEdit ? html(card.id) : ""}">
       ${!isEdit ? `<div class="import-helper"><div><strong>ONE-CLICK YUYU-TEI IMPORT</strong><small>Drag this button to your browser bookmarks bar once. On any Yuyu-tei card page, click the bookmark to open CardBoy with every available detail filled in.</small></div><a class="import-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this button to your bookmarks bar">DRAG TO BOOKMARKS</a></div>` : ""}
       <div class="form-grid">
         <div class="form-fields">
-          <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">FETCH</button></div><small id="fetch-status"${pendingCardImport && (!isEdit || importedUpdate) ? ' class="import-success"' : ""}>${html(importStatus)}</small></div>
+          <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">${fetchButtonLabel(value.sourceUrl)}</button></div><small id="fetch-status"${pendingCardImport && (!isEdit || importedUpdate) ? ' class="import-success"' : ""}>${html(importStatus)}</small></div>
           <div class="field"><label for="card-series">Card series</label><select id="card-series" name="series">${Object.keys(SERIES).map((series) => `<option ${series === value.series ? "selected" : ""}>${html(series)}</option>`).join("")}</select></div>
           <div class="two-fields"><div class="field"><label for="card-code">Card code</label><input id="card-code" name="code" value="${html(value.code)}" placeholder="OP08-106" required/></div><div class="field"><label for="card-title">Card name</label><input id="card-title" name="title" value="${html(value.title)}" placeholder="Nami" required/></div></div>
           <div class="two-fields"><div class="field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" step="1" value="${value.quantity}" required/></div><div class="field"><label for="card-currency">Currency</label><select id="card-currency" name="currency"><option ${value.currency === "JPY" ? "selected" : ""}>JPY</option><option ${value.currency === "USD" ? "selected" : ""}>USD</option></select></div></div>
@@ -898,6 +912,10 @@ function bindEvents() {
   document.querySelector("#rates-form")?.addEventListener("submit", saveRates);
   document.querySelector("#card-form")?.addEventListener("submit", saveCard);
   document.querySelector("#image-file")?.addEventListener("change", handleImageUpload);
+  document.querySelector("#source-url")?.addEventListener("input", (event) => {
+    const button = document.querySelector('#card-form [data-action="fetch"]');
+    if (button && !button.disabled) button.textContent = fetchButtonLabel(event.currentTarget.value);
+  });
   const cardGrid = document.querySelector("[data-card-grid]");
   if (cardGrid) {
     cardGrid.addEventListener("dragover", handleCardDragOver);
@@ -1325,9 +1343,12 @@ async function fetchPreview() {
   const form = document.querySelector("#card-form");
   const button = form.querySelector('[data-action="fetch"]');
   const status = document.querySelector("#fetch-status");
+  const imageOnly = isYuyuteiSourceUrl(urlInput.value.trim());
   button.disabled = true;
   button.textContent = "READING";
-  status.textContent = "Reading product data and image from the source page…";
+  status.textContent = imageOnly
+    ? "Locating the card image from Yuyutei…"
+    : "Reading product data and image from the source page…";
   try {
     let card;
     if (backend.isReady && backend.user) {
@@ -1349,13 +1370,13 @@ async function fetchPreview() {
     }
     const fields = [card.title, card.code, card.nativePrice, card.image].filter(Boolean).length;
     status.textContent = card.notice || (card.image ? "Details and product image fetched from the source." : "Details fetched; this page did not expose a product image.");
-    toast(`${fields} card details fetched from the source.`);
+    toast(imageOnly && card.image ? "Card image fetched from Yuyutei." : `${fields} card details fetched from the source.`);
   } catch (error) {
     status.textContent = error.message;
     toast(`Could not fetch this source: ${error.message}`);
   } finally {
     button.disabled = false;
-    button.textContent = "FETCH";
+    button.textContent = fetchButtonLabel(urlInput.value);
   }
 }
 
