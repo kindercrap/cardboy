@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check app.js && node --check backend.js && node --check card-order.js && node --check manual-price-check.js && node --check manual-update-queue.js && node --check monitor-status.js && node --check server.mjs && node --check scripts/monitor-prices.mjs && node --check supabase/functions/_shared/card-value.js",
+    "check": "node --check app.js && node --check backend.js && node --check card-order.js && node --check manual-update-queue.js && node --check server.mjs",
     "test": "node --test"
   },
   "engines": {

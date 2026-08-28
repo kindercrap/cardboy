@@ -1,5 +1,3 @@
-import { extractCardValueImage, isCardValueCardUrl, parseCardValuePage } from "./card-value.js";
-
 export type ExtractedCard = {
   title: string;
   code: string;
@@ -12,7 +10,7 @@ export type ExtractedCard = {
 };
 
 function allowedHosts() {
-  return new Set((Deno.env.get("ALLOWED_SOURCE_HOSTS") || "yuyu-tei.jp,www.yuyu-tei.jp,card-value.jp,www.card-value.jp").split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
+  return new Set((Deno.env.get("ALLOWED_SOURCE_HOSTS") || "yuyu-tei.jp,www.yuyu-tei.jp").split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
 }
 
 function decodeEntities(value = "") {
@@ -71,6 +69,9 @@ function yuyuImage(url: URL) {
 export async function extractCard(source: string): Promise<ExtractedCard> {
   const url = new URL(source);
   if (url.protocol !== "https:") throw new Error("Only HTTPS card pages are supported.");
+  if (/(^|\.)card-value\.jp$/i.test(url.hostname)) {
+    throw new Error("Card-Value is no longer used. Add the original Yuyutei card-page URL instead.");
+  }
   if (!allowedHosts().has(url.hostname.toLowerCase())) throw new Error(`This source is not enabled yet: ${url.hostname}`);
   const fallbackImage = yuyuImage(url);
   if (fallbackImage) {
@@ -82,7 +83,7 @@ export async function extractCard(source: string): Promise<ExtractedCard> {
       nativePrice: null,
       currency: "JPY",
       sourceUrl: url.href,
-      notice: "CardBoy does not scrape Yuyutei pages directly. Paste the matching Card-Value card URL or use the bookmark importer.",
+      notice: "Card image fetched from Yuyutei. Use the CardBoy bookmark or Update Queue to read the current Yuyutei price.",
     };
   }
   const response = await fetch(url, {
@@ -104,22 +105,6 @@ export async function extractCard(source: string): Promise<ExtractedCard> {
   if (!contentType.includes("text/html")) throw new Error("The URL is not an HTML card page.");
   const body = await response.text();
   if (body.length > 3_000_000) throw new Error("The source page is too large to process.");
-
-  if (isCardValueCardUrl(url.href)) {
-    const parsed = parseCardValuePage(body, url.href);
-    return {
-      title: parsed.cardName,
-      code: parsed.cardNumber,
-      series: "ONE PIECE",
-      image: extractCardValueImage(body, url.href),
-      nativePrice: parsed.yuyuteiPrice,
-      currency: "JPY",
-      sourceUrl: url.href,
-      notice: parsed.yuyuteiPrice === null
-        ? "Card-Value does not list a Yuyutei selling price for this variant."
-        : "Yuyutei selling price extracted from Card-Value's store-by-store selling table.",
-    };
-  }
 
   let product: Record<string, unknown> | null = null;
   for (const match of body.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {

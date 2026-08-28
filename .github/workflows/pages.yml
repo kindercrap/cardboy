@@ -25,7 +25,7 @@ jobs:
       - name: Prepare static site
         run: |
           mkdir _site
-          cp index.html app.js backend.js card-order.js manual-price-check.js manual-update-queue.js monitor-status.js config.js styles.css _site/
+          cp index.html app.js backend.js card-order.js manual-update-queue.js config.js styles.css _site/
           cp -R images _site/images
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5

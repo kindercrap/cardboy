@@ -3,8 +3,6 @@ import { readFile, stat } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { extname, join, normalize } from "node:path";
-import { extractCardValueImage, isCardValueCardUrl, parseCardValuePage } from "./supabase/functions/_shared/card-value.js";
-
 const host = "127.0.0.1";
 const port = Number(process.env.PORT || 4173);
 const root = process.cwd();
@@ -131,26 +129,11 @@ function yuyuteiFallbackCard(url) {
     nativePrice: null,
     currency: "JPY",
     sourceUrl: url.href,
-    notice: "CardBoy does not scrape Yuyutei pages directly. Paste the matching Card-Value card URL or use the bookmark importer.",
+    notice: "Card image fetched from Yuyutei. Use the CardBoy bookmark or Update Queue to read the current Yuyutei price.",
   };
 }
 
 function extractCard(body, finalUrl) {
-  if (isCardValueCardUrl(finalUrl.href)) {
-    const parsed = parseCardValuePage(body, finalUrl.href);
-    return {
-      title: parsed.cardName,
-      code: parsed.cardNumber,
-      series: "ONE PIECE",
-      image: extractCardValueImage(body, finalUrl.href),
-      nativePrice: parsed.yuyuteiPrice,
-      currency: "JPY",
-      sourceUrl: finalUrl.href,
-      notice: parsed.yuyuteiPrice === null
-        ? "Card-Value does not list a Yuyutei selling price for this variant."
-        : "Yuyutei selling price extracted from Card-Value's store-by-store selling table.",
-    };
-  }
   let product = null;
   const scripts = body.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
   for (const match of scripts) {
@@ -199,6 +182,9 @@ createServer(async (request, response) => {
       if (!sourceUrl) return json(response, 400, { error: "A card page URL is required." });
       try {
         const validated = await validatePublicUrl(sourceUrl);
+        if (/(^|\.)card-value\.jp$/i.test(validated.hostname)) {
+          throw new Error("Card-Value is no longer used. Add the original Yuyutei card-page URL instead.");
+        }
         if (/(^|\.)yuyu-tei\.jp$/i.test(validated.hostname)) {
           return json(response, 200, { card: yuyuteiFallbackCard(validated) });
         }

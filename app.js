@@ -10,23 +10,10 @@ import {
   normalizeManualUpdateQueue,
   parseQuickUpdateSource,
 } from "./manual-update-queue.js";
-import {
-  createInitialMonitorRun,
-  MONITOR_STATUS_ACTIVE_POLL_MS,
-  MONITOR_STATUS_IDLE_POLL_MS,
-  MONITOR_RECENT_RESULT_MS,
-  monitorRunSignature,
-  monitorStatusView,
-  normalizeMonitorRun,
-} from "./monitor-status.js";
-
 const STORAGE_KEY = "cardboy-demo-v1";
 const CARD_IMPORT_KEY = "cardboy-pending-import-v1";
 const UPDATE_QUEUE_KEY = "cardboy-manual-update-queue-v1";
 const APP_SCHEMA_VERSION = 5;
-const DAILY_CHECK_HOUR = 9;
-const DAILY_CHECK_MINUTE = 15;
-const DAILY_CHECK_LABEL = "9:15 AM PHT";
 
 const SERIES = {
   "ONE PIECE": { color: "#ffd43b", bg: "#cc5d26", shape: "#ffd43b", mark: "OP" },
@@ -115,7 +102,6 @@ const initialState = {
   liveRates: { JPY: 0.39, USD: 56.8 },
   ratesCustomized: false,
   lastPortfolioCheck: new Date().toISOString(),
-  monitorRun: createInitialMonitorRun(),
   notifications: [],
   cards: defaultCards,
 };
@@ -126,9 +112,6 @@ let pendingCardImport = loadPendingCardImport();
 let manualUpdateQueue = loadManualUpdateQueue();
 let pendingImageFile = null;
 let backendSyncInProgress = false;
-let monitorStatusSyncInProgress = false;
-let monitorStatusTimer = null;
-let manualMonitorOverrideUntil = 0;
 let nativeCardDrag = null;
 let pointerCardDrag = null;
 let suppressCardOpenUntil = 0;
@@ -141,6 +124,7 @@ function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (!saved) return structuredClone(initialState);
+    const { monitorRun: _retiredMonitorRun, ...savedState } = saved;
     const previousVersion = saved.schemaVersion || 1;
     let migratedCards = saved.cards || [];
     if (previousVersion < 2) migratedCards = migratedCards.filter((card) => !["sv8a-247", "fb04-129"].includes(card.id));
@@ -156,7 +140,7 @@ function loadState() {
     })));
     return {
       ...structuredClone(initialState),
-      ...saved,
+      ...savedState,
       schemaVersion: APP_SCHEMA_VERSION,
       cards: migratedCards || structuredClone(defaultCards),
       notifications: previousVersion < 3 ? (saved.notifications || []).filter((item) => Math.abs(item.change) < 500) : saved.notifications || [],
@@ -170,7 +154,7 @@ function loadState() {
 }
 
 function saveState() {
-  const { modal, activeCardId, page, monitorRun, ...persisted } = state;
+  const { modal, activeCardId, page, ...persisted } = state;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
   } catch {
@@ -432,7 +416,7 @@ async function loadCloudPortfolio() {
       change: Number(card.change_percent || 0),
       lastChecked: card.last_checked || card.updated_at,
       monitorStatus: card.monitor_status || "pending",
-      monitorMessage: card.monitor_message || "Waiting for the next scheduled Card-Value check.",
+      monitorMessage: card.monitor_message || "Price updates come directly from Yuyutei through Update Queue.",
       monitorCheckedAt: card.monitor_checked_at || null,
       history: padHistory(snapshots.get(card.id) || [], card.source_price),
     })));
@@ -468,35 +452,6 @@ async function loadCloudPortfolio() {
   }
 }
 
-function scheduleMonitorStatusSync() {
-  if (monitorStatusTimer) clearTimeout(monitorStatusTimer);
-  if (!backend.isReady) return;
-  const delay = state.monitorRun?.status === "running" ? MONITOR_STATUS_ACTIVE_POLL_MS : MONITOR_STATUS_IDLE_POLL_MS;
-  monitorStatusTimer = setTimeout(refreshMonitorStatus, delay);
-}
-
-async function refreshMonitorStatus() {
-  if (!backend.isReady || monitorStatusSyncInProgress) return;
-  if (Date.now() < manualMonitorOverrideUntil) {
-    scheduleMonitorStatusSync();
-    return;
-  }
-  monitorStatusSyncInProgress = true;
-  try {
-    const remote = await backend.getMonitorStatus();
-    const next = normalizeMonitorRun(remote);
-    if (monitorRunSignature(next) !== monitorRunSignature(state.monitorRun)) {
-      state.monitorRun = next;
-      render();
-    }
-  } catch (error) {
-    console.warn(`Monitor status sync failed: ${error.message}`);
-  } finally {
-    monitorStatusSyncInProgress = false;
-    scheduleMonitorStatusSync();
-  }
-}
-
 async function applyBackendUser(user) {
   if (user) {
     state.user = {
@@ -528,7 +483,6 @@ async function initializeProductionBackend() {
     render();
     const user = await backend.initialize((nextUser) => applyBackendUser(nextUser));
     await applyBackendUser(user);
-    await refreshMonitorStatus();
   } catch (error) {
     toast(`Cloud setup could not start: ${error.message}`);
   }
@@ -560,24 +514,17 @@ function unitPhp(card) {
 }
 
 function monitoringInfo(card) {
-  if (card.monitorStatus === "active") {
+  if (isYuyuteiSourceUrl(card.sourceUrl)) {
     return {
       className: "active",
-      label: "PRICE MONITORED",
-      detail: "Automatic daily monitoring reads this exact variant's Yuyutei selling price via Card-Value.",
-    };
-  }
-  if (card.monitorStatus === "unsupported") {
-    return {
-      className: "manual",
-      label: "MANUAL UPDATE",
-      detail: card.monitorMessage || "Card-Value does not currently list a Yuyutei selling price for this exact variant. Use the bookmark importer for updates.",
+      label: "YUYUTEI SOURCE",
+      detail: "Price updates are read directly from this Yuyutei page through Update Queue.",
     };
   }
   return {
-    className: "pending",
-    label: "CHECK PENDING",
-    detail: "Monitoring support will be confirmed during the next scheduled price check.",
+    className: "manual",
+    label: "MANUAL PRICE",
+    detail: "Add a Yuyutei card-page URL to use direct price updates.",
   };
 }
 
@@ -643,7 +590,6 @@ function render() {
 function renderHeader() {
   const user = state.user;
   const unread = state.notifications.filter((item) => !item.read).length;
-  const monitor = monitorStatusView(state.monitorRun, { dailyCheckLabel: DAILY_CHECK_LABEL });
   return `
     <header class="topbar">
       <button class="brand-button" data-action="navigate" data-page="dashboard" aria-label="Go to dashboard">
@@ -669,7 +615,7 @@ function renderHeader() {
         </div>
       </div>
     </header>
-    <div class="rate-strip ${monitor.running ? "monitor-running" : ""}">
+    <div class="rate-strip">
       <div class="rate-summary">
         <span class="rate-dot"></span>
         <span>¥1 = ₱${state.rates.JPY.toFixed(2)}</span>
@@ -677,7 +623,7 @@ function renderHeader() {
         <span>$1 = ₱${state.rates.USD.toFixed(2)}</span>
         <button class="rate-edit" data-action="rates">${state.ratesCustomized ? "CUSTOM" : "EDIT RATES"}</button>
       </div>
-      <div class="sync-status ${monitor.className}" role="status" aria-live="polite" title="${html(monitor.title)}"><span class="sync-dot" aria-hidden="true"></span><span>${html(monitor.label)}</span></div>
+      <div class="sync-status complete" role="status" title="Prices update directly from saved Yuyutei pages through Update Queue."><span class="sync-dot" aria-hidden="true"></span><span>YUYUTEI DIRECT · UPDATE QUEUE</span></div>
     </div>
   `;
 }
@@ -702,9 +648,9 @@ function renderDashboard() {
         <div>
           <p class="eyebrow">Portfolio overview</p>
           <h1>Good ${greeting()}, collector.</h1>
-           <p class="page-subtitle">Only cards tagged “Card I own” are included. Daily check begins at ${DAILY_CHECK_LABEL}.</p>
+           <p class="page-subtitle">Only cards tagged “Card I own” are included. Prices update directly from Yuyutei through Update Queue.</p>
         </div>
-        <button class="primary-button dark" data-action="refresh">${icon("refresh")}<span>CHECK PRICES</span></button>
+        <button class="primary-button dark" data-action="update-queue">${icon("refresh")}<span>UPDATE YUYUTEI PRICES</span></button>
       </div>
       <div class="metrics-grid">
         ${metrics
@@ -859,13 +805,12 @@ function renderCards() {
   const hasViewFilters = state.filter !== "ALL" || state.ownershipFilter !== "ALL" || Boolean(state.cardSearch);
   const portfolioCards = ownedCards();
   const ownedUnits = portfolioCards.reduce((sum, card) => sum + card.quantity, 0);
-  const monitoredCards = state.cards.filter((card) => card.monitorStatus === "active").length;
   const pinnedCards = state.cards.filter((card) => card.pinned === true).length;
   const manualCards = manualUpdateCandidates(state.cards).length;
   return `
     <section class="page">
       <div class="page-head">
-        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} tracked · ${pinnedCards} pinned · ${portfolioCards.length} owned · ${ownedUnits} owned units · ${monitoredCards} price monitored</p></div>
+        <div><p class="eyebrow">Your collection</p><h1>My cards</h1><p class="page-subtitle">${state.cards.length} tracked · ${pinnedCards} pinned · ${portfolioCards.length} owned · ${ownedUnits} owned units · ${manualCards} Yuyutei-linked</p></div>
       </div>
       <div class="toolbar">
         <div class="filters" aria-label="Filter by card series">
@@ -974,12 +919,12 @@ function renderNotificationsModal() {
   const items = state.notifications;
   return modalShell(
     `<div class="notification-modal-body">
-      <div class="notification-summary"><p>Price movement alerts from manual checks and Card-Value's Yuyutei selling table.</p><span>Daily check: ${DAILY_CHECK_LABEL}</span></div>
+      <div class="notification-summary"><p>Price movement alerts from direct Yuyutei queue updates.</p><span>Source: saved Yuyutei card pages</span></div>
       <div class="notification-list">
         ${
           items.length
             ? items.map((item) => `<button class="notification-row" data-action="notification-card" data-id="${html(item.cardId)}"><span class="notification-tone ${item.change >= 0 ? "up" : "down"}">${item.change >= 0 ? "↗" : "↘"}</span><span class="notification-copy"><strong>${html(item.title)}</strong><small>${html(item.message)}</small><time>${notificationTime(item.createdAt)}</time></span></button>`).join("")
-            : `<div class="notification-empty"><span>${icon("bell")}</span><strong>No price alerts yet</strong><small>Movements will appear after a manual or daily check.</small></div>`
+            : `<div class="notification-empty"><span>${icon("bell")}</span><strong>No price alerts yet</strong><small>Movements will appear after a Yuyutei queue update.</small></div>`
         }
       </div>
       ${items.length ? '<div class="notification-actions"><button class="secondary-button" data-action="clear-notifications">CLEAR ALL</button></div>' : ""}
@@ -1399,8 +1344,6 @@ async function handleAction(event) {
     render();
   } else if (action === "fetch") {
     fetchPreview();
-  } else if (action === "refresh") {
-    refreshPrices(false);
   } else if (action === "reset-rates") {
     state.rates = { ...state.liveRates };
     state.ratesCustomized = false;
@@ -1481,8 +1424,8 @@ async function saveCard(event) {
       ? existing.monitorStatus || "pending"
       : "pending",
     monitorMessage: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
-      ? existing.monitorMessage || "Waiting for the next scheduled Card-Value check."
-      : "Waiting for the next scheduled Card-Value check.",
+      ? existing.monitorMessage || "Price updates come directly from Yuyutei through Update Queue."
+      : "Price updates come directly from Yuyutei through Update Queue.",
     monitorCheckedAt: existing && canonicalSourceUrl(existing.sourceUrl) === canonicalSourceUrl(String(data.get("sourceUrl")))
       ? existing.monitorCheckedAt || null
       : null,
@@ -1665,152 +1608,6 @@ function resizeImage(file, maxSide, quality) {
   });
 }
 
-let priceCheckInProgress = false;
-let dailyCheckTimer = null;
-
-async function refreshPrices(automatic) {
-  if (priceCheckInProgress) return;
-  priceCheckInProgress = true;
-  const startedAt = new Date().toISOString();
-  const totalSources = new Set(state.cards.map((card) => safeUrl(card.sourceUrl)).filter((url) => url !== "#")).size;
-  state.monitorRun = {
-    ...createInitialMonitorRun(),
-    status: "running",
-    trigger: automatic ? "scheduled" : "manual",
-    startedAt,
-    totalSources,
-    message: "Checking the latest Yuyutei selling prices via Card-Value.",
-  };
-  render();
-  if (!automatic) toast("Checking live card sources…");
-  if (backend.isReady && backend.user) {
-    try {
-      const result = await backend.checkPrices();
-      priceCheckInProgress = false;
-      await loadCloudPortfolio();
-      if (result.fallback) {
-        const completedAt = new Date().toISOString();
-        manualMonitorOverrideUntil = Date.now() + MONITOR_RECENT_RESULT_MS;
-        state.monitorRun = {
-          ...state.monitorRun,
-          status: "success",
-          completedAt,
-          lastSuccessAt: completedAt,
-          processedSources: result.checked + result.unsupported,
-          totalSources: result.checked + result.unsupported,
-          checkedSources: result.checked,
-          observations: result.observations || 0,
-          movements: result.movements,
-          unsupportedSources: result.unsupported,
-          message: `${result.checked} live sources checked through the recovery path. ${result.movements} price movements found.`,
-        };
-        render();
-      } else {
-        await refreshMonitorStatus();
-      }
-      if (!automatic) {
-        if (result.movements) toast(`${result.movements} price movement${result.movements === 1 ? "" : "s"} found.`);
-        else if (result.fallback && result.unsupported) toast(`Price check complete. ${result.checked} checked; ${result.unsupported} need a Card-Value variant URL.`);
-        else toast("Price check complete. No movements found.");
-      }
-    } catch (error) {
-      priceCheckInProgress = false;
-      state.monitorRun = {
-        ...state.monitorRun,
-        status: "error",
-        completedAt: new Date().toISOString(),
-        message: error.message,
-      };
-      render();
-      toast(`Price check failed: ${error.message}`);
-    }
-    return;
-  }
-  const checkedAt = new Date().toISOString();
-  const movements = [];
-  const updated = await Promise.all(
-    state.cards.map(async (card) => {
-      const source = safeUrl(card.sourceUrl);
-      if (source === "#" || new URL(source).hostname === "example.com") return { ...card, lastChecked: checkedAt };
-      try {
-        const response = await fetch(`/api/extract?url=${encodeURIComponent(card.sourceUrl)}`);
-        const payload = await response.json();
-        if (!response.ok || !payload.card?.nativePrice) return { ...card, lastChecked: checkedAt };
-        const nextPrice = Number(payload.card.nativePrice);
-        const currency = payload.card.currency || card.currency;
-        const change = card.nativePrice ? Number((((nextPrice - card.nativePrice) / card.nativePrice) * 100).toFixed(1)) : 0;
-        if (nextPrice !== card.nativePrice) movements.push({ card, nextPrice, change, currency });
-        return {
-          ...card,
-          nativePrice: nextPrice,
-          currency,
-          image: payload.card.image || card.image,
-          change,
-          lastChecked: checkedAt,
-          history: nextPrice === card.nativePrice ? card.history : [...card.history.slice(-11), nextPrice],
-        };
-      } catch {
-        return { ...card, lastChecked: checkedAt };
-      }
-    }),
-  );
-  state.cards = updated;
-  movements.forEach(({ card, nextPrice, change, currency }) => {
-    const converted = nextPrice * state.rates[currency];
-    state.notifications.unshift({
-      id: `${card.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      cardId: card.id,
-      title: `${card.title} ${change >= 0 ? "increased" : "decreased"} ${Math.abs(change).toFixed(1)}%`,
-      message: `Now ${nativeMoney(nextPrice, currency)} (${money(converted)}) per card.`,
-      change,
-      createdAt: checkedAt,
-      read: false,
-      automatic,
-    });
-  });
-  state.notifications = state.notifications.slice(0, 30);
-  state.lastPortfolioCheck = checkedAt;
-  state.monitorRun = {
-    ...state.monitorRun,
-    status: "success",
-    completedAt: checkedAt,
-    lastSuccessAt: checkedAt,
-    processedSources: totalSources,
-    totalSources,
-    checkedSources: totalSources,
-    movements: movements.length,
-    message: `${totalSources} sources checked. ${movements.length} price movements found.`,
-  };
-  priceCheckInProgress = false;
-  saveState();
-  render();
-  if (!automatic) toast(movements.length ? `${movements.length} price movement${movements.length === 1 ? "" : "s"} found.` : "Price check complete. No movements found.");
-}
-
-function philippineCheckWindow(now = new Date()) {
-  const phNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  const todayCheck = new Date(Date.UTC(phNow.getUTCFullYear(), phNow.getUTCMonth(), phNow.getUTCDate(), DAILY_CHECK_HOUR - 8, DAILY_CHECK_MINUTE));
-  return { todayCheck, nextCheck: new Date(todayCheck.getTime() + (now >= todayCheck ? 24 * 60 * 60 * 1000 : 0)) };
-}
-
-function scheduleDailyCheck() {
-  if (dailyCheckTimer) clearTimeout(dailyCheckTimer);
-  const { nextCheck } = philippineCheckWindow();
-  dailyCheckTimer = setTimeout(async () => {
-    await refreshPrices(true);
-    scheduleDailyCheck();
-  }, Math.max(1000, nextCheck.getTime() - Date.now()));
-}
-
-function runDailyCheck() {
-  if (backend.isConfigured) return;
-  const now = new Date();
-  const { todayCheck } = philippineCheckWindow(now);
-  const lastCheck = new Date(state.lastPortfolioCheck);
-  if (now >= todayCheck && lastCheck < todayCheck) refreshPrices(true);
-  scheduleDailyCheck();
-}
-
 async function deleteActiveCard() {
   const card = state.cards.find((item) => item.id === state.activeCardId);
   if (!card || !window.confirm(`Remove ${card.title} (${card.code}) from your collection?`)) return;
@@ -1858,5 +1655,4 @@ window.addEventListener("storage", (event) => {
 });
 
 render();
-runDailyCheck();
 initializeProductionBackend();
