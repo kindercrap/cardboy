@@ -1,4 +1,5 @@
 import { backend } from "./backend.js";
+import { createYuyuteiBookmarklet } from "./bookmarklet.js";
 import { filterAndSortCards, normalizeCardOrder, toggleCardPinned } from "./card-order.js";
 import {
   applyPriceOnlyImport,
@@ -374,7 +375,7 @@ function activatePendingCardImport() {
 
 function yuyuImporterBookmarklet() {
   const appUrl = `${location.origin}${location.pathname}`;
-  return `javascript:(()=>{try{const a=[...document.querySelectorAll('script[type="application/ld+json"]')].flatMap(s=>{try{const j=JSON.parse(s.textContent);return Array.isArray(j)?j:[j]}catch{return[]}}).flatMap(j=>j['@graph']||[j]),p=a.find(x=>x&&x['@type']==='Product');if(!p)throw Error('Product data was not found on this page.');const o=Array.isArray(p.offers)?p.offers[0]:p.offers,s=new URL(location.href),q=s.hash==='#cardboy-quick'&&window.opener&&!window.opener.closed;s.hash='';const d={sourceUrl:s.href,series:s.pathname.includes('/opc/')?'ONE PIECE':'ONE PIECE',code:p.description||'',title:p.name||'',quantity:1,currency:o?.priceCurrency||'JPY',nativePrice:Number(o?.price||0),image:Array.isArray(p.image)?p.image[0]:p.image||'',availability:String(o?.availability||'').split('/').pop()},u=${JSON.stringify(appUrl)}+'?cardImport='+encodeURIComponent(JSON.stringify(d));if(q)location.replace(u+'&autoSave=1#cards');else{const w=open(u+'#cards','_blank');if(w)w.opener=null;else location.href=u+'#cards'}}catch(e){alert('CardBoy importer: '+e.message)}})()`;
+  return createYuyuteiBookmarklet(appUrl);
 }
 
 function initialsFor(user) {
@@ -893,7 +894,7 @@ function renderManualUpdateQueueModal() {
       <span>${completed ? "UPDATED" : active ? "OPENED" : "WAITING"}</span>
     </div>`).join("");
   return modalShell(
-    `<div class="modal-body update-queue-body"><div class="queue-instructions"><div><strong>RECOMMENDED BOOKMARK UPGRADE</strong><span>Replace your old CardBoy bookmark once for the cleanest one-tab flow. Older bookmarks now auto-save too.</span></div><a class="queue-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this over your existing CardBoy bookmark">DRAG NEW BOOKMARK</a></div>${currentCard ? `<div class="queue-batch"><div><strong>ONE-TAB QUICK UPDATE</strong><span>Only the source price is changed. CardBoy preserves every other card detail, then moves to the next card.</span></div><button type="button" data-action="queue-start-fast">START QUICK UPDATE</button></div>` : ""}<div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
+    `<div class="modal-body update-queue-body"><div class="queue-instructions"><div><strong>INSTALL / RESTORE BOOKMARK</strong><span>Drag the button to your bookmarks bar. Clicking it here only shows installation help.</span></div><a class="queue-bookmark" href="${html(yuyuImporterBookmarklet())}" data-action="bookmark-help" title="Drag this button to your bookmarks bar">DRAG NEW BOOKMARK</a></div>${currentCard ? `<div class="queue-batch"><div><strong>ONE-TAB QUICK UPDATE</strong><span>Only the source price is changed. CardBoy preserves every other card detail, then moves to the next card.</span></div><button type="button" data-action="queue-start-fast">START QUICK UPDATE</button></div>` : ""}<div class="queue-progress-copy"><span>${view.completed} updated</span><span>${view.remaining} remaining</span></div><div class="queue-progress"><span style="width:${progress}%"></span></div>${current}${rows ? `<div class="queue-list"><div class="queue-list-title">THIS ROUND</div>${rows}</div>` : ""}<div class="modal-actions"><button type="button" class="secondary-button" data-action="queue-reset">${view.total && !view.remaining ? "START NEW ROUND" : "RESET QUEUE"}</button><button type="button" class="primary-button" data-action="close">DONE</button></div></div>`,
     { title: "Manual update queue", className: "update-queue-modal" },
   );
 }
@@ -973,7 +974,7 @@ function renderCardForm(card = null) {
       : "Fetches the card name, code, source price, and product image when available.";
   return modalShell(
     `<form class="modal-body" id="card-form" data-editing="${isEdit ? html(card.id) : ""}">
-      ${!isEdit ? `<div class="import-helper"><div><strong>ONE-CLICK YUYU-TEI IMPORT</strong><small>Drag this button to your browser bookmarks bar once. Queue-opened cards save automatically; other Yuyu-tei pages still open a review form.</small></div><a class="import-bookmark" href="${html(yuyuImporterBookmarklet())}" title="Drag this button to your bookmarks bar">DRAG TO BOOKMARKS</a></div>` : ""}
+      ${!isEdit ? `<div class="import-helper"><div><strong>ONE-CLICK YUYU-TEI IMPORT</strong><small>Drag this button to your browser bookmarks bar once. Queue-opened cards save automatically; other Yuyu-tei pages still open a review form.</small></div><a class="import-bookmark" href="${html(yuyuImporterBookmarklet())}" data-action="bookmark-help" title="Drag this button to your bookmarks bar">DRAG TO BOOKMARKS</a></div>` : ""}
       <div class="form-grid">
         <div class="form-fields">
           <div class="field"><label for="source-url">Card page URL</label><div class="input-wrap"><input id="source-url" name="sourceUrl" type="url" placeholder="https://store.com/card/..." value="${html(value.sourceUrl)}" required/><button type="button" class="fetch-button" data-action="fetch">${fetchButtonLabel(value.sourceUrl)}</button></div><small id="fetch-status"${pendingCardImport && (!isEdit || importedUpdate) ? ' class="import-success"' : ""}>${html(importStatus)}</small></div>
@@ -1315,6 +1316,9 @@ async function handleAction(event) {
     event.preventDefault();
     const card = state.cards.find((item) => item.id === target.dataset.id);
     startQuickUpdate(card);
+  } else if (action === "bookmark-help") {
+    event.preventDefault();
+    toast("Drag this button to your bookmarks bar—do not click it. Press Ctrl+Shift+B if the bar is hidden.");
   } else if (action === "details") {
     state.activeCardId = target.dataset.id;
     openModal("details");

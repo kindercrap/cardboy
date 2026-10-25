@@ -9,7 +9,7 @@ CardBoy uses saved **Yuyutei card pages directly** for new price updates. Card-V
 The direct Yuyutei flow is intentionally user-triggered because Yuyutei blocks server-side page reads:
 
 1. Open **My Cards → Update Queue**.
-2. Drag **Drag New Bookmark** to the browser bookmarks bar once.
+2. Drag **Drag New Bookmark** to the browser bookmarks bar once. Do not click it; clicking it inside CardBoy shows installation help instead. If the bookmarks bar is hidden, press **Ctrl + Shift + B**.
 3. Choose **Start Quick Update**.
 4. On each Yuyutei page, click the CardBoy bookmark. CardBoy saves only the current source price and advances the same tab to the next queued card.
 

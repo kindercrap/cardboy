@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check app.js && node --check backend.js && node --check card-order.js && node --check manual-update-queue.js && node --check server.mjs",
+    "check": "node --check app.js && node --check backend.js && node --check bookmarklet.js && node --check card-order.js && node --check manual-update-queue.js && node --check server.mjs",
     "test": "node --test"
   },
   "engines": {
